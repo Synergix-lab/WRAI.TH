@@ -34,6 +34,8 @@ func Run(args []string) {
 		runStats(rest)
 	case "conversations":
 		runConversations(rest)
+	case "memories":
+		runMemories(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", cmd)
 		printUsage()
@@ -95,6 +97,10 @@ commands:
   thread <id>                  show full message thread
   conversations [-p project] <agent>  list conversations for agent
   stats [-p project]           global statistics
+  memories [-p project]        list persistent memories
+    -s <query>                 search memories (FTS5)
+    -a <agent>                 filter by agent
+    -t <tag>                   filter by tag
 
 flags:
   -p, --project <name>   filter by project (default: "default")

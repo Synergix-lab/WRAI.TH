@@ -46,6 +46,13 @@ func New(database *db.DB) *Relay {
 		server.ServerTool{Tool: listConversationsTool(), Handler: handlers.HandleListConversations},
 		server.ServerTool{Tool: getConversationMessagesTool(), Handler: handlers.HandleGetConversationMessages},
 		server.ServerTool{Tool: inviteToConversationTool(), Handler: handlers.HandleInviteToConversation},
+		// Memory tools
+		server.ServerTool{Tool: setMemoryTool(), Handler: handlers.HandleSetMemory},
+		server.ServerTool{Tool: getMemoryTool(), Handler: handlers.HandleGetMemory},
+		server.ServerTool{Tool: searchMemoryTool(), Handler: handlers.HandleSearchMemory},
+		server.ServerTool{Tool: listMemoriesTool(), Handler: handlers.HandleListMemories},
+		server.ServerTool{Tool: deleteMemoryTool(), Handler: handlers.HandleDeleteMemory},
+		server.ServerTool{Tool: resolveConflictTool(), Handler: handlers.HandleResolveConflict},
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(

@@ -2,7 +2,7 @@
 
 # Claude Agentic Relay
 
-**Inter-agent communication for Claude Code. One binary, zero config.**
+**Inter-agent communication & shared memory for Claude Code. One binary, zero config.**
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
 [![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-8A2BE2?style=flat-square)](https://modelcontextprotocol.io)
@@ -11,9 +11,9 @@
 [![Tokens](https://img.shields.io/badge/Token_savings-60--90%25-orange?style=flat-square)]()
 
 Running Claude Code on `backend` **and** `frontend` at the same time?<br>
-Right now they're blind to each other. **This fixes that.**
+Right now they're blind to each other — and `/clear` kills everything they learned. **This fixes both.**
 
-[Install](#install) · [Web UI](#web-ui) · [Hierarchy](#agent-hierarchy) · [User Questions](#user-questions) · [MCP Tools](#mcp-tools) · [How It Works](#how-it-works)
+[Install](#install) · [Web UI](#web-ui) · [Memory](#shared-memory) · [Hierarchy](#agent-hierarchy) · [User Questions](#user-questions) · [MCP Tools](#mcp-tools) · [How It Works](#how-it-works)
 
 </div>
 
@@ -21,9 +21,13 @@ Right now they're blind to each other. **This fixes that.**
 
 ## Why
 
-You're building a full-stack app. Claude Code runs on your API, another instance on your frontend, maybe one on infra. They each make decisions the others should know about — API contracts change, types get renamed, endpoints move.
+Two problems kill multi-agent productivity:
 
-Without the relay, **you** are the message bus. Copy-pasting between terminals. Repeating context. Losing sync.
+1. **No communication.** Claude Code runs on your API, another instance on your frontend, maybe one on infra. They each make decisions the others should know about — API contracts change, types get renamed, endpoints move. Without the relay, **you** are the message bus.
+
+2. **No memory.** When your backend agent discovers "the auth middleware expects JWT RS256 in the Authorization header," that knowledge evaporates on `/clear`. Next session, every agent rediscovers it from scratch. Context loss is the #1 pain point in AI agent development.
+
+The relay solves both: **real-time messaging** so agents talk directly, and **persistent shared memory** so knowledge survives across sessions.
 
 ## Web UI
 
@@ -45,6 +49,94 @@ The relay serves a real-time visualization at `http://localhost:8090/` — embed
 - Click any agent to see details, reports-to, and direct reports
 - Project selector + conversation filter
 - User question cards — agents ask you questions, you answer from the browser
+- **Memory panel** — browse, search, and manage persistent agent knowledge
+
+## Shared Memory
+
+The relay includes a persistent, scoped, searchable knowledge store. Agents write what they learn — other agents (and future sessions) can retrieve it instantly.
+
+```mermaid
+sequenceDiagram
+    participant B as backend
+    participant R as Relay (Memory)
+    participant F as frontend
+    participant B2 as backend (next session)
+
+    B->>R: set_memory(key="api-auth", value="JWT RS256 in Authorization header", scope="project")
+    F->>R: search_memory(query="authentication")
+    R-->>F: Found: "api-auth" → "JWT RS256 in Authorization header" (by backend, stated)
+    Note over B: /clear — session ends
+    B2->>R: get_memory(key="api-auth")
+    R-->>B2: "JWT RS256 in Authorization header" (v1, by backend)
+```
+
+**Knowledge survives `/clear`, session limits, and agent restarts.**
+
+### Scoped Access
+
+| Scope | Visible to | Use case |
+|-------|-----------|----------|
+| `agent` | Only this agent in this project | "I left off at line 452", personal notes |
+| `project` | All agents in this project | "Auth uses JWT RS256", "DB is Postgres 15", team knowledge |
+| `global` | All agents, all projects | "Always use conventional commits", org-wide patterns |
+
+**Cascade:** `get_memory("auth-format")` searches agent scope first, then project, then global. First match wins.
+
+### Conflict Detection
+
+When two agents write different values for the same key:
+
+```
+backend: set_memory(key="api-auth", value="JWT RS256", scope="project")
+frontend: set_memory(key="api-auth", value="OAuth2 bearer token", scope="project")
+  → CONFLICT flagged — both versions preserved with provenance
+```
+
+Nothing is silently overwritten. Call `resolve_conflict` to pick the truth — the loser is archived, never deleted.
+
+### Provenance
+
+Every memory automatically tracks:
+- **Who** wrote it (`agent_name`)
+- **When** (`created_at`, `updated_at`)
+- **How confident** (`stated` / `inferred` / `observed`)
+- **Version history** (`version` + `supersedes` chain)
+- **Tags** for categorization and filtering
+
+### Usage
+
+```bash
+# MCP tools (from Claude Code agents)
+set_memory(key="db-schema", value="PostgreSQL 15, RLS enabled", tags=["database"], scope="project")
+get_memory(key="db-schema")                    # cascade: agent → project → global
+search_memory(query="authentication")          # full-text search (FTS5)
+list_memories(scope="project", tags=["api"])   # browse with filters
+delete_memory(key="old-pattern")               # soft delete (archived)
+resolve_conflict(key="api-auth", chosen_value="JWT RS256")
+
+# /relay skill
+/relay remember api-auth "JWT RS256 in Authorization header"
+/relay recall api-auth
+/relay search-memory "authentication"
+/relay memories
+/relay forget old-pattern
+
+# CLI
+ar memories                    # list all memories
+ar memories -s "auth"          # full-text search
+ar memories -a backend         # filter by agent
+ar memories -t database        # filter by tag
+```
+
+### Web UI — Memory Panel
+
+The web UI includes a dedicated **Memories** tab:
+- Table view with key, value, scope, author, tags, confidence, age
+- Full-text search bar (FTS5-powered)
+- Filter by scope and project
+- Click to expand full value
+- Conflict indicators (red border + badge)
+- Archive memories directly from the UI
 
 ## Token Savings
 
@@ -58,6 +150,8 @@ Every time you manually relay context between agents, you're burning tokens on b
 | "I changed the auth middleware" | ~800 tokens (you describe changes) | ~100 tokens (broadcast notification) | **87%** |
 | Debug cross-stack issue | ~5,000 tokens (back-and-forth via you) | ~800 tokens (threaded conversation) | **84%** |
 | Share a code snippet | ~1,500 tokens (copy-paste + context) | ~300 tokens (code-snippet message) | **80%** |
+| Context after `/clear` | ~3,000 tokens (re-explain everything) | ~50 tokens (`get_memory`) | **98%** |
+| New agent onboarding | ~4,000 tokens (paste docs, explain patterns) | ~100 tokens (`search_memory`) | **97%** |
 | Full-stack feature (10 syncs) | ~15,000 tokens | ~2,500 tokens | **83%** |
 
 ### Why it saves tokens
@@ -105,8 +199,8 @@ graph TB
     CCN <-->|"MCP"| R
 
     R["Relay :8090<br/><small>MCP Streamable HTTP</small>"]
-    R --- DB[("SQLite WAL<br/><small>~/.agent-relay/relay.db</small>")]
-    R --- UI["Web UI :8090<br/><small>Real-time canvas + user questions</small>"]
+    R --- DB[("SQLite WAL + FTS5<br/><small>messages + memories</small>")]
+    R --- UI["Web UI :8090<br/><small>Canvas + Memory panel</small>"]
 
     U["You (browser)"] <-->|"REST API"| UI
 
@@ -119,7 +213,7 @@ graph TB
     style U fill:#00e676,color:#000
 ```
 
-**Single binary** (~8MB) · **N agents** (no limit) · **SQLite WAL** (persistent, concurrent) · **Zero external deps** · **Auto-start** service
+**Single binary** (~8MB) · **N agents** (no limit) · **SQLite WAL + FTS5** (persistent, concurrent, searchable) · **Zero external deps** · **Auto-start** service
 
 The CLI reads directly from SQLite — no running server needed for queries.
 
@@ -220,6 +314,10 @@ ar send <from> <to> <msg>       # send a message
 ar thread <id>                  # show thread (supports short IDs)
 ar conversations <agent>        # list conversations for agent
 ar stats                        # global statistics
+ar memories                     # list persistent memories
+ar memories -s "auth"           # search memories (FTS5)
+ar memories -a backend          # filter by agent
+ar memories -t api              # filter by tag
 ar --version                    # version
 ar --help                       # help
 ```
@@ -270,7 +368,7 @@ threads: 12
 
 ## MCP Tools
 
-Ten tools exposed via MCP Streamable HTTP at `/mcp`:
+16 tools exposed via MCP Streamable HTTP at `/mcp`:
 
 | Tool | Description |
 |------|-------------|
@@ -284,6 +382,12 @@ Ten tools exposed via MCP Streamable HTTP at `/mcp`:
 | `list_conversations` | List your conversations with unread counts |
 | `get_conversation_messages` | Get messages from a conversation |
 | `invite_to_conversation` | Add an agent to a conversation |
+| `set_memory` | Store persistent knowledge with scoping, tags, and conflict detection |
+| `get_memory` | Retrieve memory by key with scope cascade (agent → project → global) |
+| `search_memory` | Full-text search across memories (FTS5) |
+| `list_memories` | Browse memories with scope, tag, and agent filters |
+| `delete_memory` | Soft-delete a memory (archived, never hard deleted) |
+| `resolve_conflict` | Resolve conflicting memory values — pick a winner |
 
 ### Message Types
 
@@ -429,11 +533,15 @@ Installed automatically. Use in any Claude Code session:
 | `/relay agents` | List connected agents |
 | `/relay thread <id>` | View conversation thread |
 | `/relay read` | Mark all as read |
-| `/relay read <id>` | Mark specific message as read |
 | `/relay conversations` | List your conversations |
 | `/relay create <title> <agents...>` | Create a conversation |
 | `/relay msg <conv-id> <message>` | Send to a conversation |
 | `/relay invite <conv-id> <agent>` | Invite agent to conversation |
+| `/relay remember <key> <value>` | Store a memory (project scope) |
+| `/relay recall <key>` | Retrieve a memory (cascading) |
+| `/relay search-memory <query>` | Full-text search memories |
+| `/relay memories` | List all project memories |
+| `/relay forget <key>` | Soft-delete a memory |
 
 On first run in a new project, the skill auto-bootstraps: it creates `.mcp.json` with the relay config if missing.
 
@@ -450,7 +558,7 @@ graph LR
         MCP["MCP Streamable HTTP<br/><small>JSON-RPC 2.0</small>"]
     end
     subgraph "Persistence"
-        SQLite["SQLite WAL<br/><small>agents + messages + hierarchy</small>"]
+        SQLite["SQLite WAL + FTS5<br/><small>messages + memories</small>"]
     end
     subgraph "Notifications"
         Push["MCP Server→Client<br/><small>notifications/message</small>"]
@@ -470,6 +578,7 @@ graph LR
 
 - **Protocol**: [MCP](https://modelcontextprotocol.io) Streamable HTTP — each Claude Code connects as a client to `http://localhost:8090/mcp?project=<name>`
 - **Persistence**: SQLite with WAL mode — concurrent reads, durable writes. DB at `~/.agent-relay/relay.db`
+- **Memory**: FTS5 full-text search, scoped access (agent/project/global), conflict detection, provenance tracking, version history
 - **Threading**: Messages linked via `reply_to`. Threads reconstructed with recursive CTE queries
 - **Push**: When a message arrives, the relay sends an MCP notification to the recipient's active session
 - **Broadcast**: `to="*"` delivers to all agents except sender
@@ -484,9 +593,11 @@ messages (id, from_agent, to_agent, reply_to, type, subject, content, metadata, 
 conversations (id, title, created_by, created_at, archived_at, project)
 conversation_members (conversation_id, agent_name, joined_at, left_at)
 conversation_reads (conversation_id, agent_name, last_read_at)
+memories (id, key, value, tags, scope, project, agent_name, confidence, version, supersedes, conflict_with, created_at, updated_at, archived_at, archived_by)
+memories_fts (key, value, tags)  -- FTS5 virtual table, auto-synced via triggers
 ```
 
-Indexes optimize inbox queries, unread filters, thread reconstruction, and conversation membership lookups.
+Indexes optimize inbox queries, unread filters, thread reconstruction, conversation membership lookups, and memory scope/key lookups. FTS5 triggers keep the full-text index in sync on every insert, update, and delete.
 
 ## Service Management
 
@@ -523,16 +634,16 @@ Database: `~/.agent-relay/relay.db` (created automatically on first run)
 ```
 main.go                         # Entry + CLI routing
 internal/
-  cli/                          # CLI commands (status, agents, inbox, send, thread, stats)
-  db/                           # SQLite layer (WAL, migrations, queries, stats)
-  relay/                        # MCP server, tools, handlers, REST API, push notifications
-  models/                       # Agent, Message, Conversation structs
-  web/static/                   # Embedded web UI (canvas, sprites, real-time viz)
+  cli/                          # CLI commands (status, agents, inbox, send, thread, stats, memories)
+  db/                           # SQLite layer (WAL, FTS5, migrations, queries, memories)
+  relay/                        # MCP server, 16 tools, handlers, REST API, push notifications
+  models/                       # Agent, Message, Conversation, Memory structs
+  web/static/                   # Embedded web UI (canvas, memory panel, sprites, real-time viz)
 skill/
   relay.md                      # Claude Code /relay command definition
 ```
 
-~820 lines of Go. Built with [mcp-go](https://github.com/mark3labs/mcp-go) · [go-sqlite3](https://github.com/mattn/go-sqlite3) · [google/uuid](https://github.com/google/uuid)
+Built with [mcp-go](https://github.com/mark3labs/mcp-go) · [go-sqlite3](https://github.com/mattn/go-sqlite3) · [google/uuid](https://github.com/google/uuid)
 
 ## Contributing
 

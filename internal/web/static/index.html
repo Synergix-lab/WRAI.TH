@@ -15,13 +15,9 @@
       <span id="status-dot" class="status-dot"></span>
       <span id="agent-count" class="agent-count">0 agents</span>
     </div>
-    <div class="header-right">
-      <select id="project-select">
-        <option value="default">default</option>
-      </select>
-      <select id="conv-select">
-        <option value="">-- All conversations --</option>
-      </select>
+    <div class="header-tabs">
+      <button id="tab-messages" class="header-tab active">Messages</button>
+      <button id="tab-memories" class="header-tab">Memories <span id="memory-count" class="memory-badge">0</span></button>
     </div>
   </header>
 
@@ -35,6 +31,25 @@
       </div>
       <div id="messages-list"></div>
     </div>
+    <div id="memories-panel" class="hidden">
+      <div id="memories-header">
+        <div class="memories-search-row">
+          <input id="memories-search" type="text" placeholder="Search memories..." />
+        </div>
+        <div class="memories-filters">
+          <select id="memories-scope-filter">
+            <option value="">All scopes</option>
+            <option value="agent">Agent</option>
+            <option value="project">Project</option>
+            <option value="global">Global</option>
+          </select>
+          <select id="memories-project-filter">
+            <option value="">All projects</option>
+          </select>
+        </div>
+      </div>
+      <div id="memories-list"></div>
+    </div>
   </main>
 
   <div id="agent-detail" class="detail-panel">
@@ -42,6 +57,7 @@
     <div id="detail-name" class="detail-name"></div>
     <div id="detail-role" class="detail-field"></div>
     <div id="detail-desc" class="detail-field"></div>
+    <div id="detail-project" class="detail-field"></div>
     <div class="detail-section">
       <div class="detail-label">Status</div>
       <div id="detail-status" class="detail-value"></div>

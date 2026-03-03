@@ -176,6 +176,9 @@ func migrate(conn *sql.DB) error {
 	// SQLite can't drop inline constraints, so we rebuild the table.
 	migrateDropGlobalUnique(conn)
 
+	// Memory system tables
+	migrateMemories(conn)
+
 	return nil
 }
 
@@ -221,4 +224,58 @@ func migrateDropGlobalUnique(conn *sql.DB) {
 	}
 
 	tx.Commit()
+}
+
+// migrateMemories creates the memories table, FTS5 virtual table, and sync triggers.
+func migrateMemories(conn *sql.DB) {
+	// Main table
+	conn.Exec(`
+	CREATE TABLE IF NOT EXISTS memories (
+		id            TEXT PRIMARY KEY,
+		key           TEXT NOT NULL,
+		value         TEXT NOT NULL,
+		tags          TEXT NOT NULL DEFAULT '[]',
+		scope         TEXT NOT NULL,
+		project       TEXT NOT NULL DEFAULT 'default',
+		agent_name    TEXT NOT NULL,
+		confidence    TEXT NOT NULL DEFAULT 'stated',
+		version       INTEGER NOT NULL DEFAULT 1,
+		supersedes    TEXT,
+		conflict_with TEXT,
+		created_at    TEXT NOT NULL,
+		updated_at    TEXT NOT NULL,
+		archived_at   TEXT,
+		archived_by   TEXT
+	)`)
+
+	// Indexes
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_key_scope ON memories(project, scope, key) WHERE archived_at IS NULL`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_name)`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_tags ON memories(project, scope)`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at DESC)`)
+
+	// FTS5 virtual table for full-text search
+	conn.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+		key, value, tags,
+		content=memories,
+		content_rowid=rowid
+	)`)
+
+	// Triggers to keep FTS in sync
+	conn.Exec(`CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+		INSERT INTO memories_fts(rowid, key, value, tags)
+		VALUES (new.rowid, new.key, new.value, new.tags);
+	END`)
+
+	conn.Exec(`CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+		INSERT INTO memories_fts(memories_fts, rowid, key, value, tags)
+		VALUES ('delete', old.rowid, old.key, old.value, old.tags);
+	END`)
+
+	conn.Exec(`CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+		INSERT INTO memories_fts(memories_fts, rowid, key, value, tags)
+		VALUES ('delete', old.rowid, old.key, old.value, old.tags);
+		INSERT INTO memories_fts(rowid, key, value, tags)
+		VALUES (new.rowid, new.key, new.value, new.tags);
+	END`)
 }

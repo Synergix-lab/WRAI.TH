@@ -4,7 +4,6 @@ export class APIClient {
     this.onConversations = onConversations;
     this.onNewMessages = onNewMessages;
 
-    this.project = "default";
     this._lastMessageTime = null;
     this._agentTimer = null;
     this._msgTimer = null;
@@ -12,26 +11,21 @@ export class APIClient {
     this._running = false;
   }
 
-  setProject(p) {
-    this.project = p;
-    this._lastMessageTime = null; // reset watermark
-  }
-
   start() {
     this._running = true;
 
-    // Initial fetch
-    this.fetchAgents();
-    this.fetchConversations();
+    // Initial fetch (cross-project)
+    this.fetchAllAgents();
+    this.fetchAllConversations();
 
     // Poll agents every 5s
-    this._agentTimer = setInterval(() => this.fetchAgents(), 5000);
+    this._agentTimer = setInterval(() => this.fetchAllAgents(), 5000);
 
     // Poll conversations every 10s
-    this._convTimer = setInterval(() => this.fetchConversations(), 10000);
+    this._convTimer = setInterval(() => this.fetchAllConversations(), 10000);
 
     // Poll new messages every 2s
-    this._msgTimer = setInterval(() => this.fetchLatestMessages(), 2000);
+    this._msgTimer = setInterval(() => this.fetchLatestMessagesAllProjects(), 2000);
   }
 
   stop() {
@@ -41,67 +35,36 @@ export class APIClient {
     clearInterval(this._convTimer);
   }
 
-  async fetchProjects() {
+  async fetchAllAgents() {
     try {
-      const res = await fetch("/api/projects");
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async fetchAgents() {
-    try {
-      const res = await fetch(`/api/agents?project=${encodeURIComponent(this.project)}`);
+      const res = await fetch("/api/agents/all");
       if (!res.ok) return;
       const agents = await res.json();
       this.onAgents(agents);
     } catch (e) {
-      console.error("[relay] fetchAgents error:", e);
+      console.error("[relay] fetchAllAgents error:", e);
     }
   }
 
-  async fetchConversations() {
+  async fetchAllConversations() {
     try {
-      const res = await fetch(`/api/conversations?project=${encodeURIComponent(this.project)}`);
+      const res = await fetch("/api/conversations/all");
       if (!res.ok) return;
       const convs = await res.json();
       this.onConversations(convs);
     } catch (e) {
-      console.error("[relay] fetchConversations error:", e);
+      console.error("[relay] fetchAllConversations error:", e);
     }
   }
 
-  async fetchConversationMessages(convId) {
-    try {
-      const res = await fetch(`/api/conversations/${convId}/messages?project=${encodeURIComponent(this.project)}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async fetchAllMessages() {
-    try {
-      const res = await fetch(`/api/messages/all?project=${encodeURIComponent(this.project)}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async fetchLatestMessages() {
+  async fetchLatestMessagesAllProjects() {
     try {
       const since = this._lastMessageTime || new Date(Date.now() - 30000).toISOString();
-      const res = await fetch(`/api/messages/latest?since=${encodeURIComponent(since)}&project=${encodeURIComponent(this.project)}`);
+      const res = await fetch(`/api/messages/latest-all?since=${encodeURIComponent(since)}`);
       if (!res.ok) return;
       const msgs = await res.json();
 
       if (msgs.length > 0) {
-        // Update watermark to the latest message time
         this._lastMessageTime = msgs[msgs.length - 1].created_at;
         this.onNewMessages(msgs);
       }
@@ -110,9 +73,19 @@ export class APIClient {
     }
   }
 
-  async fetchOrgTree() {
+  async fetchAllMessagesAllProjects() {
     try {
-      const res = await fetch(`/api/org?project=${encodeURIComponent(this.project)}`);
+      const res = await fetch("/api/messages/all-projects");
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async fetchConversationMessages(convId) {
+    try {
+      const res = await fetch(`/api/conversations/${convId}/messages`);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -130,6 +103,68 @@ export class APIClient {
       return res.ok;
     } catch {
       return false;
+    }
+  }
+
+  // --- Memory API ---
+
+  async fetchMemories(params = {}) {
+    try {
+      const qs = new URLSearchParams();
+      if (params.project) qs.set("project", params.project);
+      if (params.scope) qs.set("scope", params.scope);
+      if (params.agent) qs.set("agent", params.agent);
+      if (params.tag) qs.set("tag", params.tag);
+      const res = await fetch(`/api/memories?${qs}`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async searchMemories(query) {
+    try {
+      const res = await fetch(`/api/memories/search?q=${encodeURIComponent(query)}`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async createMemory(data) {
+    try {
+      const res = await fetch("/api/memories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteMemory(id) {
+    try {
+      const res = await fetch(`/api/memories/${id}`, { method: "DELETE" });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async resolveConflict(key, chosenValue, project, scope) {
+    try {
+      const res = await fetch(`/api/memories/${encodeURIComponent(key)}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chosen_value: chosenValue, project, scope }),
+      });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
     }
   }
 }

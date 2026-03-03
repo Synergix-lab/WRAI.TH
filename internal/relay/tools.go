@@ -129,3 +129,100 @@ func inviteToConversationTool() mcp.Tool {
 		mcp.WithString("agent_name", mcp.Description("Agent name to invite"), mcp.Required()),
 	)
 }
+
+// --- Memory tools ---
+
+func setMemoryTool() mcp.Tool {
+	return mcp.NewTool(
+		"set_memory",
+		mcp.WithDescription("Store a piece of knowledge in persistent memory. If the key exists with a different value at the same scope, a conflict is flagged (both versions preserved). Use resolve_conflict to pick the truth."),
+		asParam,
+		projectParam,
+		mcp.WithString("key", mcp.Description("Memory key (e.g. 'auth-header-format', 'db-schema-version')"), mcp.Required()),
+		mcp.WithString("value", mcp.Description("The knowledge to store"), mcp.Required()),
+		mcp.WithArray("tags", mcp.Description("Categorization tags for search and filtering (e.g. ['auth', 'api'])"), mcp.WithStringItems()),
+		mcp.WithString("scope",
+			mcp.Description("Visibility scope: 'agent' (private), 'project' (shared with team), 'global' (cross-project)"),
+			mcp.Enum("agent", "project", "global"),
+		),
+		mcp.WithString("confidence",
+			mcp.Description("How this knowledge was obtained"),
+			mcp.Enum("stated", "inferred", "observed"),
+		),
+	)
+}
+
+func getMemoryTool() mcp.Tool {
+	return mcp.NewTool(
+		"get_memory",
+		mcp.WithDescription("Retrieve a memory by key. Searches with scope cascade: agent → project → global. If a conflict exists, returns ALL conflicting values with provenance so you can decide."),
+		asParam,
+		projectParam,
+		mcp.WithString("key", mcp.Description("The memory key to look up"), mcp.Required()),
+		mcp.WithString("scope",
+			mcp.Description("Specific scope to search (skips cascade). Leave empty for automatic cascade."),
+			mcp.Enum("agent", "project", "global"),
+		),
+	)
+}
+
+func searchMemoryTool() mcp.Tool {
+	return mcp.NewTool(
+		"search_memory",
+		mcp.WithDescription("Full-text search across memories. Returns ranked results with provenance and confidence. Cross-scope search by default (respects agent privacy)."),
+		asParam,
+		projectParam,
+		mcp.WithString("query", mcp.Description("Search query (full-text search)"), mcp.Required()),
+		mcp.WithArray("tags", mcp.Description("Filter by tags"), mcp.WithStringItems()),
+		mcp.WithString("scope",
+			mcp.Description("Limit search to a specific scope"),
+			mcp.Enum("agent", "project", "global"),
+		),
+		mcp.WithNumber("limit", mcp.Description("Max results to return (default: 20)")),
+	)
+}
+
+func listMemoriesTool() mcp.Tool {
+	return mcp.NewTool(
+		"list_memories",
+		mcp.WithDescription("Browse memories with filtering. Shows key, truncated value, tags, provenance. Useful for 'what does the team know about X?'"),
+		asParam,
+		projectParam,
+		mcp.WithString("scope",
+			mcp.Description("Filter by scope"),
+			mcp.Enum("agent", "project", "global"),
+		),
+		mcp.WithArray("tags", mcp.Description("Filter by tags"), mcp.WithStringItems()),
+		mcp.WithString("agent", mcp.Description("Filter by author agent name")),
+		mcp.WithNumber("limit", mcp.Description("Max results (default: 50)")),
+	)
+}
+
+func deleteMemoryTool() mcp.Tool {
+	return mcp.NewTool(
+		"delete_memory",
+		mcp.WithDescription("Soft-delete a memory (archived, never hard deleted). Only the author or same scope can archive."),
+		asParam,
+		projectParam,
+		mcp.WithString("key", mcp.Description("The memory key to archive"), mcp.Required()),
+		mcp.WithString("scope",
+			mcp.Description("Scope of the memory to delete"),
+			mcp.Enum("agent", "project", "global"),
+		),
+	)
+}
+
+func resolveConflictTool() mcp.Tool {
+	return mcp.NewTool(
+		"resolve_conflict",
+		mcp.WithDescription("Resolve a flagged memory conflict by choosing one value or providing a new one. The rejected version is archived with resolution metadata."),
+		asParam,
+		projectParam,
+		mcp.WithString("key", mcp.Description("The conflicted memory key"), mcp.Required()),
+		mcp.WithString("chosen_value", mcp.Description("The value to keep (can be one of the existing values or a new one)"), mcp.Required()),
+		mcp.WithString("scope",
+			mcp.Description("Scope where the conflict exists"),
+			mcp.Enum("agent", "project", "global"),
+		),
+	)
+}

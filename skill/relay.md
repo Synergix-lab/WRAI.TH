@@ -2,7 +2,7 @@ You are an inter-agent communication assistant using the Agent Relay MCP server.
 
 ## Bootstrap — ALWAYS run this first
 
-Before doing anything, check if the `agent-relay` MCP server is available (i.e. you have access to tools like `register_agent`, `send_message`, `get_inbox`, `list_agents`, `get_thread`, `mark_read`, `create_conversation`, `list_conversations`, `get_conversation_messages`, `invite_to_conversation`).
+Before doing anything, check if the `agent-relay` MCP server is available (i.e. you have access to tools like `register_agent`, `send_message`, `get_inbox`, `list_agents`, `get_thread`, `mark_read`, `create_conversation`, `list_conversations`, `get_conversation_messages`, `invite_to_conversation`, `set_memory`, `get_memory`, `search_memory`, `list_memories`, `delete_memory`, `resolve_conflict`).
 
 **If the tools are NOT available**, the relay MCP server is not configured for this project. Fix it automatically:
 
@@ -99,6 +99,12 @@ Parse the user's arguments from `$ARGUMENTS`:
 - **`msg <conversation_id> <message>`**: Send a message to a conversation
 - **`invite <conversation_id> <agent>`**: Invite an agent to a conversation
 - **`talk`**: Enter conversation mode (proactive loop)
+- **`remember <key> <value>`**: Store a memory (`set_memory` with scope `project`)
+- **`remember --scope agent|global <key> <value>`**: Store with specific scope
+- **`recall <key>`**: Retrieve a memory (cascades agent → project → global)
+- **`search-memory <query>`**: Full-text search across memories
+- **`memories`**: List all memories for the current project
+- **`forget <key>`**: Soft-delete a memory
 
 ## Behavior
 
@@ -180,3 +186,68 @@ Enter a proactive conversation loop. This is how multi-agent conversations actua
 - If a message asks you to do something (review code, check an endpoint, etc.), actually do it using your tools, then report back via relay
 - Keep the loop going as long as messages keep arriving — don't stop after one round
 - If using multi-agent mode (`as`), respond as the correct agent for each message
+
+### Storing a memory (`remember`)
+1. Parse: first word after `remember` is the key, rest is the value
+2. Check for `--scope agent|project|global` flag (default: `project`)
+3. Check for `--tags tag1,tag2` flag (optional)
+4. Call `set_memory` with `key`, `value`, `scope`, and `tags`
+5. If a conflict is returned, inform the user and suggest `/relay resolve <key>`
+
+### Retrieving a memory (`recall`)
+1. Call `get_memory` with the key
+2. Display the value with provenance (who wrote it, when, confidence)
+3. If multiple conflicting values exist, display all with provenance and suggest resolving
+
+### Searching memories (`search-memory`)
+1. Call `search_memory` with the query
+2. Display results in a clear format:
+   ```
+   🧠 N memories found for "<query>":
+
+   [scope] key — value (truncated)
+   By: <agent> | Confidence: <confidence> | Tags: <tags>
+   ---
+   ```
+
+### Listing memories (`memories`)
+1. Call `list_memories` (filtered to current project by default)
+2. Display as a table with key, scope, agent, value preview, tags, and age
+
+### Deleting a memory (`forget`)
+1. Parse: first word after `forget` is the key
+2. Check for `--scope` flag (default: `project`)
+3. Call `delete_memory` — this is a soft delete (archived, never hard deleted)
+4. Confirm the deletion
+
+### Resolving a conflict (`resolve`)
+1. Parse: first word after `resolve` is the key
+2. Call `get_memory` to show the conflicting values
+3. Ask the user which value to keep (or accept a new value)
+4. Call `resolve_conflict` with the chosen value
+5. Confirm the resolution
+
+## Memory System
+
+The relay includes a persistent, scoped, searchable memory layer. Agents can store and retrieve knowledge that survives `/clear` and session restarts.
+
+### Scopes
+- **`agent`** — Private to this agent in this project (e.g., "I left off at line 452")
+- **`project`** — Shared with all agents in this project (e.g., "Auth uses JWT RS256")
+- **`global`** — Shared across all projects (e.g., "Always use conventional commits")
+
+### Cascade
+`get_memory` searches agent scope first, then project, then global. First match wins.
+
+### Conflicts
+When two agents write different values for the same key at the same scope, both are preserved with a conflict flag. Use `resolve_conflict` to pick the truth — the loser is archived, never deleted.
+
+### Provenance
+Every memory tracks who wrote it (`agent_name`), when (`created_at`/`updated_at`), how confident (`stated`/`inferred`/`observed`), and version history (`version` + `supersedes`).
+
+### Best practices
+- Use descriptive keys like `api-auth-format`, `db-connection-string`, `frontend-routing-pattern`
+- Tag memories for discoverability: `["auth", "api"]`, `["database", "schema"]`
+- Use `project` scope for team knowledge, `agent` scope for personal notes
+- Search before writing — another agent may have already documented what you need
+- Resolve conflicts promptly to keep the knowledge base clean
