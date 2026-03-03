@@ -136,7 +136,9 @@ func (d *DB) MarkRead(messageIDs []string, agentName string) (int, error) {
 
 	n, _ := result.RowsAffected()
 
-	// Also update conversation_reads for any conversation messages just marked
+	// Also update conversation_reads for any conversation messages just marked.
+	// Collect all conversation IDs first, then close rows before writing
+	// (SQLite deadlocks if you write while a read cursor is open).
 	convPlaceholders := ""
 	convArgs := make([]any, 0, len(messageIDs))
 	for i, id := range messageIDs {
@@ -151,12 +153,16 @@ func (d *DB) MarkRead(messageIDs []string, agentName string) (int, error) {
 		convArgs...,
 	)
 	if err == nil {
-		defer convRows.Close()
+		var convIDs []string
 		for convRows.Next() {
 			var convID string
 			if err := convRows.Scan(&convID); err == nil {
-				_ = d.MarkConversationRead(convID, agentName)
+				convIDs = append(convIDs, convID)
 			}
+		}
+		convRows.Close()
+		for _, convID := range convIDs {
+			_ = d.MarkConversationRead(convID, agentName)
 		}
 	}
 
