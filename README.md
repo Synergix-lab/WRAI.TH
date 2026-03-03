@@ -13,7 +13,7 @@
 Running Claude Code on `backend` **and** `frontend` at the same time?<br>
 Right now they're blind to each other. **This fixes that.**
 
-[Install](#install) · [Token Savings](#token-savings) · [CLI](#cli) · [MCP Tools](#mcp-tools) · [How It Works](#how-it-works)
+[Install](#install) · [Web UI](#web-ui) · [Hierarchy](#agent-hierarchy) · [User Questions](#user-questions) · [MCP Tools](#mcp-tools) · [How It Works](#how-it-works)
 
 </div>
 
@@ -24,6 +24,27 @@ Right now they're blind to each other. **This fixes that.**
 You're building a full-stack app. Claude Code runs on your API, another instance on your frontend, maybe one on infra. They each make decisions the others should know about — API contracts change, types get renamed, endpoints move.
 
 Without the relay, **you** are the message bus. Copy-pasting between terminals. Repeating context. Losing sync.
+
+## Web UI
+
+The relay serves a real-time visualization at `http://localhost:8090/` — embedded in the binary, zero setup.
+
+<!-- TODO: Add demo video -->
+<!-- > **[Demo video]** — agents communicating, hierarchy lines, user question flow -->
+<!-- > [![Demo](docs/assets/demo-thumbnail.png)](https://...) -->
+
+| Canvas view | Agent detail | User questions |
+|:-----------:|:------------:|:--------------:|
+| ![Canvas](docs/assets/screenshot-canvas.png) | ![Detail](docs/assets/screenshot-detail.png) | ![Questions](docs/assets/screenshot-questions.png) |
+
+*Screenshots coming soon — run `agent-relay serve` and open http://localhost:8090 to see it live.*
+
+**Features:**
+- Pixel-art agent sprites arranged in a circle, animated message orbs
+- Org hierarchy lines (dashed) between agents and their managers
+- Click any agent to see details, reports-to, and direct reports
+- Project selector + conversation filter
+- User question cards — agents ask you questions, you answer from the browser
 
 ## Token Savings
 
@@ -69,27 +90,36 @@ graph LR
 
 ```mermaid
 graph TB
-    subgraph "Claude Code Instances"
-        CC1["backend<br/><small>FastAPI developer</small>"]
-        CC2["frontend<br/><small>Next.js developer</small>"]
-        CC3["infra<br/><small>DevOps engineer</small>"]
+    subgraph "N Claude Code Instances"
+        CC1["cto<br/><small>Vision & strategy</small>"]
+        CC2["tech-lead<br/><small>Architecture</small>"]
+        CC3["backend<br/><small>FastAPI developer</small>"]
+        CC4["frontend<br/><small>Next.js developer</small>"]
+        CCN["...<br/><small>any number of agents</small>"]
     end
 
-    CC1 <-->|"MCP / HTTP"| R
-    CC2 <-->|"MCP / HTTP"| R
-    CC3 <-->|"MCP / HTTP"| R
+    CC1 <-->|"MCP"| R
+    CC2 <-->|"MCP"| R
+    CC3 <-->|"MCP"| R
+    CC4 <-->|"MCP"| R
+    CCN <-->|"MCP"| R
 
     R["Relay :8090<br/><small>MCP Streamable HTTP</small>"]
     R --- DB[("SQLite WAL<br/><small>~/.agent-relay/relay.db</small>")]
+    R --- UI["Web UI :8090<br/><small>Real-time canvas + user questions</small>"]
+
+    U["You (browser)"] <-->|"REST API"| UI
 
     CLI["CLI<br/><small>agent-relay status|agents|inbox|...</small>"] -.->|"read-only"| DB
 
     style R fill:#8A2BE2,color:#fff
     style DB fill:#f5f5f5,stroke:#333
     style CLI fill:#00ADD8,color:#fff
+    style UI fill:#6c5ce7,color:#fff
+    style U fill:#00e676,color:#000
 ```
 
-**Single binary** (~8MB) · **SQLite WAL** (persistent, concurrent) · **Zero external deps** · **Auto-start** service
+**Single binary** (~8MB) · **N agents** (no limit) · **SQLite WAL** (persistent, concurrent) · **Zero external deps** · **Auto-start** service
 
 The CLI reads directly from SQLite — no running server needed for queries.
 
@@ -334,13 +364,32 @@ sequenceDiagram
 
 ## Agent Hierarchy
 
-Agents can declare a manager via the `reports_to` parameter on `register_agent`:
+Agents can declare a manager via the `reports_to` parameter on `register_agent`. The org tree builds automatically — no central config needed.
+
+```mermaid
+graph TD
+    CTO["cto<br/><small>reports_to: none</small>"]
+    TL["tech-lead<br/><small>reports_to: cto</small>"]
+    BE["backend<br/><small>reports_to: tech-lead</small>"]
+    FE["frontend<br/><small>reports_to: tech-lead</small>"]
+    QA["qa<br/><small>reports_to: tech-lead</small>"]
+
+    CTO --> TL
+    TL --> BE
+    TL --> FE
+    TL --> QA
+
+    style CTO fill:#6c5ce7,color:#fff
+    style TL fill:#a29bfe,color:#fff
+    style BE fill:#00b894,color:#fff
+    style FE fill:#00b894,color:#fff
+    style QA fill:#00b894,color:#fff
+```
 
 ```
 register_agent(name: "backend", role: "FastAPI developer", reports_to: "tech-lead")
 ```
 
-This builds an org tree visible in the web UI:
 - **Canvas**: dashed lines connect agents to their managers
 - **Detail panel**: shows "Reports To" (clickable) and "Direct Reports" (clickable tags)
 - **REST API**: `GET /api/org?project=X` returns the hierarchy as nested JSON
@@ -349,13 +398,25 @@ The hierarchy is purely structural — it doesn't affect permissions or message 
 
 ## User Questions
 
-Agents can ask the human user a question via the web UI by sending a `user_question` message:
+Agents can ask the human user a question directly from the web UI:
+
+```mermaid
+sequenceDiagram
+    participant A as Agent (CTO)
+    participant R as Relay
+    participant UI as Web UI (you)
+
+    A->>R: send_message(type: "user_question", "Should we use Stripe?")
+    R-->>UI: card appears in browser
+    UI->>R: POST /api/user-response (your answer)
+    R-->>A: message from "user" in inbox
+```
 
 ```
 send_message(to: "user", type: "user_question", subject: "Need approval", content: "Should we proceed with Stripe?")
 ```
 
-In the web UI, a card appears in the bottom-left with the question and a response form. When the user responds, the reply arrives in the agent's inbox as a regular message with `from: "user"`.
+A card appears in the bottom-left of the web UI with the question and a response form. When you respond, the reply arrives in the agent's inbox as a regular message with `from: "user"`.
 
 ## `/relay` Skill
 
@@ -389,17 +450,22 @@ graph LR
         MCP["MCP Streamable HTTP<br/><small>JSON-RPC 2.0</small>"]
     end
     subgraph "Persistence"
-        SQLite["SQLite WAL<br/><small>agents + messages tables</small>"]
+        SQLite["SQLite WAL<br/><small>agents + messages + hierarchy</small>"]
     end
     subgraph "Notifications"
         Push["MCP Server→Client<br/><small>notifications/message</small>"]
     end
+    subgraph "Web UI"
+        REST["REST API + Canvas<br/><small>real-time viz + user questions</small>"]
+    end
 
     HTTP --> MCP --> SQLite
     SQLite --> Push
+    SQLite --> REST
 
     style MCP fill:#8A2BE2,color:#fff
     style SQLite fill:#f5f5f5,stroke:#333
+    style REST fill:#6c5ce7,color:#fff
 ```
 
 - **Protocol**: [MCP](https://modelcontextprotocol.io) Streamable HTTP — each Claude Code connects as a client to `http://localhost:8090/mcp?agent=<name>`
