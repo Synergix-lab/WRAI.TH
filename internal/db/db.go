@@ -177,7 +177,9 @@ func migrate(conn *sql.DB) error {
 	migrateDropGlobalUnique(conn)
 
 	// Memory system tables
-	migrateMemories(conn)
+	if err := migrateMemories(conn); err != nil {
+		return fmt.Errorf("migrate memories: %w", err)
+	}
 
 	return nil
 }
@@ -227,9 +229,9 @@ func migrateDropGlobalUnique(conn *sql.DB) {
 }
 
 // migrateMemories creates the memories table, FTS5 virtual table, and sync triggers.
-func migrateMemories(conn *sql.DB) {
+func migrateMemories(conn *sql.DB) error {
 	// Main table
-	conn.Exec(`
+	if _, err := conn.Exec(`
 	CREATE TABLE IF NOT EXISTS memories (
 		id            TEXT PRIMARY KEY,
 		key           TEXT NOT NULL,
@@ -246,20 +248,26 @@ func migrateMemories(conn *sql.DB) {
 		updated_at    TEXT NOT NULL,
 		archived_at   TEXT,
 		archived_by   TEXT
-	)`)
+	)`); err != nil {
+		return fmt.Errorf("create memories table: %w", err)
+	}
 
-	// Indexes
+	// Indexes (all idempotent)
 	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_key_scope ON memories(project, scope, key) WHERE archived_at IS NULL`)
 	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_name)`)
 	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_tags ON memories(project, scope)`)
 	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at DESC)`)
 
-	// FTS5 virtual table for full-text search
-	conn.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+	// FTS5 virtual table for full-text search.
+	// Requires building with -tags "fts5" for github.com/mattn/go-sqlite3.
+	if _, err := conn.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 		key, value, tags,
 		content=memories,
 		content_rowid=rowid
-	)`)
+	)`); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: FTS5 not available (build with -tags \"fts5\"): %v\n", err)
+		return nil // non-fatal: memory CRUD works, search degrades
+	}
 
 	// Triggers to keep FTS in sync
 	conn.Exec(`CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
@@ -278,4 +286,6 @@ func migrateMemories(conn *sql.DB) {
 		INSERT INTO memories_fts(rowid, key, value, tags)
 		VALUES (new.rowid, new.key, new.value, new.tags);
 	END`)
+
+	return nil
 }

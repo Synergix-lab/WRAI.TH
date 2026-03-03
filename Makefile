@@ -21,7 +21,7 @@ SKILL_FILE := relay.md
 
 ## build: Compile the binary with version info
 build:
-	$(GOFLAGS) go build -ldflags="$(LDFLAGS)" -o $(BINARY) .
+	$(GOFLAGS) go build -tags "fts5" -ldflags="$(LDFLAGS)" -o $(BINARY) .
 
 ## install: Build, install binary, skill, and service
 install: build skill

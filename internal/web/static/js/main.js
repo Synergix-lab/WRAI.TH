@@ -61,15 +61,14 @@ function layoutAgents() {
   const cy = engine.height / 2;
 
   if (projects.length <= 1) {
-    // --- Single project: fill the viewport ---
+    // --- Single project: direct screen-space, no camera ---
     const project = projects[0] || "default";
     const keys = projectGroups.get(project) || new Set();
     const agentCount = keys.size;
 
-    // Use 35% of the smaller viewport dimension as radius
-    // This guarantees agents fill the screen at zoom 1.0
+    // Fill the viewport: 30% of the smaller dimension as radius
     const radius = agentCount > 1
-      ? Math.min(engine.width, engine.height) * 0.35
+      ? Math.min(engine.width, engine.height) * 0.30
       : 0;
 
     let i = 0;
@@ -89,13 +88,8 @@ function layoutAgents() {
 
     world.clusters = [{ project, cx, cy, radius: radius + 60, hidden: true }];
 
-    // Camera: just center on agents at zoom 1.0 — positions are already viewport-relative
-    if (firstLayout) {
-      engine.camera.snapTo(cx, cy, 1.0);
-      firstLayout = false;
-    } else {
-      engine.camera.lookAt(cx, cy, 1.0);
-    }
+    // Neutralize camera — positions are screen-space
+    engine.camera.snapTo(cx, cy, 1.0);
   } else {
     // --- Multiple projects: clusters on a large circle ---
     // Each cluster's inner radius fills proportionally
