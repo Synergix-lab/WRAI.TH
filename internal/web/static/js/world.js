@@ -58,17 +58,60 @@ export class World {
     ctx.stroke();
     ctx.restore();
 
-    // Hierarchy lines between agents
+    // Hierarchy lines between agents (manager → report)
     if (this.hierarchyLinks.length > 0) {
       ctx.save();
-      ctx.setLineDash([3, 6]);
-      ctx.strokeStyle = "rgba(108, 92, 231, 0.15)";
-      ctx.lineWidth = 1;
       for (const link of this.hierarchyLinks) {
+        const mx = link.from.x, my = link.from.y; // manager
+        const rx = link.to.x, ry = link.to.y;     // report
+
+        // Curve control point: offset toward canvas center for a nice arc
+        const midX = (mx + rx) / 2;
+        const midY = (my + ry) / 2;
+        const dx = rx - mx, dy = ry - my;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 1) continue;
+
+        // Perpendicular offset toward center
+        const perpX = -dy / len;
+        const perpY = dx / len;
+        const toCenterX = cx - midX;
+        const toCenterY = cy - midY;
+        const dot = perpX * toCenterX + perpY * toCenterY;
+        const sign = dot > 0 ? 1 : -1;
+        const bulge = Math.min(len * 0.2, 40);
+        const cpx = midX + perpX * bulge * sign;
+        const cpy = midY + perpY * bulge * sign;
+
+        // Draw curved line
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = "rgba(162, 155, 254, 0.35)";
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(link.from.x, link.from.y);
-        ctx.lineTo(link.to.x, link.to.y);
+        ctx.moveTo(mx, my);
+        ctx.quadraticCurveTo(cpx, cpy, rx, ry);
         ctx.stroke();
+
+        // Arrow at report end (pointing toward subordinate)
+        const t = 0.92;
+        const nearX = (1-t)*(1-t)*mx + 2*(1-t)*t*cpx + t*t*rx;
+        const nearY = (1-t)*(1-t)*my + 2*(1-t)*t*cpy + t*t*ry;
+        const arrAngle = Math.atan2(ry - nearY, rx - nearX);
+        const arrLen = 8;
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(108, 92, 231, 0.5)";
+        ctx.beginPath();
+        ctx.moveTo(rx - Math.cos(arrAngle) * 24, ry - Math.sin(arrAngle) * 24);
+        ctx.lineTo(
+          rx - Math.cos(arrAngle) * 24 - Math.cos(arrAngle - 0.5) * arrLen,
+          ry - Math.sin(arrAngle) * 24 - Math.sin(arrAngle - 0.5) * arrLen
+        );
+        ctx.lineTo(
+          rx - Math.cos(arrAngle) * 24 - Math.cos(arrAngle + 0.5) * arrLen,
+          ry - Math.sin(arrAngle) * 24 - Math.sin(arrAngle + 0.5) * arrLen
+        );
+        ctx.closePath();
+        ctx.fill();
       }
       ctx.restore();
     }
