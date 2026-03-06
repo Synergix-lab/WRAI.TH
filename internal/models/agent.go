@@ -8,5 +8,6 @@ type Agent struct {
 	RegisteredAt string  `json:"registered_at"`
 	LastSeen     string  `json:"last_seen"`
 	Project      string  `json:"project"`
-	ReportsTo    *string `json:"reports_to,omitempty"`
+	ReportsTo *string `json:"reports_to,omitempty"`
+	SessionID *string `json:"session_id,omitempty"`
 }

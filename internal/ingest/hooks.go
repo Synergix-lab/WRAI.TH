@@ -22,13 +22,14 @@ type hookEvent struct {
 }
 
 type hooksWatcher struct {
-	dir      string
-	out      chan<- AgentEvent
-	detector *Detector
+	dir             string
+	out             chan<- AgentEvent
+	detector        *Detector
+	sessionProvider SessionProvider
 }
 
-func newHooksWatcher(dir string, out chan<- AgentEvent, detector *Detector) *hooksWatcher {
-	return &hooksWatcher{dir: dir, out: out, detector: detector}
+func newHooksWatcher(dir string, out chan<- AgentEvent, detector *Detector, sp SessionProvider) *hooksWatcher {
+	return &hooksWatcher{dir: dir, out: out, detector: detector, sessionProvider: sp}
 }
 
 func (h *hooksWatcher) run(ctx context.Context) {
@@ -107,6 +108,15 @@ func (h *hooksWatcher) processFile(path string) {
 		log.Printf("[ingest] invalid JSON in %s: %v", filepath.Base(path), err)
 		os.Remove(path)
 		return
+	}
+
+	// Filter: only process events from registered agent sessions
+	if h.sessionProvider != nil {
+		known := h.sessionProvider()
+		if !known[he.SessionID] {
+			os.Remove(path)
+			return
+		}
 	}
 
 	// Parse timestamp

@@ -19,6 +19,7 @@ func registerAgentTool() mcp.Tool {
 		mcp.WithString("role", mcp.Description("Agent role description (e.g. 'FastAPI backend developer')")),
 		mcp.WithString("description", mcp.Description("What this agent is currently working on")),
 		mcp.WithString("reports_to", mcp.Description("Name of the agent this one reports to (for org hierarchy)")),
+		mcp.WithString("session_id", mcp.Description("Claude Code session ID ($CLAUDE_SESSION_ID) — used for activity tracking via hooks")),
 	)
 }
 

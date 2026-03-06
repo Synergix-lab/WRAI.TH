@@ -29,8 +29,9 @@ func (h *Handlers) HandleRegisterAgent(ctx context.Context, req mcp.CallToolRequ
 	role := req.GetString("role", "")
 	description := req.GetString("description", "")
 	reportsTo := optionalString(req.GetString("reports_to", ""))
+	sessionID := optionalString(req.GetString("session_id", ""))
 
-	agent, err := h.db.RegisterAgent(project, name, role, description, reportsTo)
+	agent, err := h.db.RegisterAgent(project, name, role, description, reportsTo, sessionID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to register agent: %v", err)), nil
 	}

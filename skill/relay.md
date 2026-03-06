@@ -40,7 +40,7 @@ The project name is typically the directory name of the codebase (e.g., `brandos
 Your agent name is NOT in the URL — multiple sessions share the same `.mcp.json`. Instead:
 
 1. On first `/relay` invocation, ask the user what agent name to use (e.g., "cto", "backend", "tech-lead"), or infer from the project context and your CLAUDE.md role.
-2. Call `register_agent(name: "<chosen-name>")` to claim your identity for this session.
+2. Call `register_agent(name: "<chosen-name>", session_id: "<your $CLAUDE_SESSION_ID>")` to claim your identity for this session. The `session_id` enables real-time activity tracking (typing, reading, terminal, idle) on the web UI.
 3. Use the `as: "<chosen-name>"` parameter on ALL subsequent tool calls (`send_message`, `get_inbox`, `list_conversations`, `mark_read`, etc.).
 
 This lets multiple Claude Code sessions run in the same directory, each with a different agent name.
@@ -48,7 +48,7 @@ This lets multiple Claude Code sessions run in the same directory, each with a d
 ### Example
 
 ```
-register_agent(name: "backend", role: "FastAPI developer", reports_to: "tech-lead")
+register_agent(name: "backend", role: "FastAPI developer", reports_to: "tech-lead", session_id: "$CLAUDE_SESSION_ID")
 send_message(as: "backend", to: "frontend", subject: "...", content: "...")
 get_inbox(as: "backend")
 ```

@@ -9,6 +9,7 @@ import (
 type Config struct {
 	HooksDir        string
 	EventBufferSize int
+	SessionProvider SessionProvider
 }
 
 func (c *Config) defaults() {
@@ -21,10 +22,14 @@ func (c *Config) defaults() {
 	}
 }
 
+// SessionProvider returns the set of known Claude session IDs from registered agents.
+type SessionProvider func() map[string]bool
+
 type Ingester struct {
-	Events   chan AgentEvent
-	detector *Detector
-	cancel   context.CancelFunc
+	Events          chan AgentEvent
+	detector        *Detector
+	cancel          context.CancelFunc
+	SessionProvider SessionProvider
 }
 
 func New(cfg Config) (*Ingester, error) {
@@ -34,15 +39,16 @@ func New(cfg Config) (*Ingester, error) {
 
 	events := make(chan AgentEvent, cfg.EventBufferSize)
 	detector := newDetector(events)
-	watcher := newHooksWatcher(cfg.HooksDir, events, detector)
+	watcher := newHooksWatcher(cfg.HooksDir, events, detector, cfg.SessionProvider)
 
 	go detector.run(ctx)
 	go watcher.run(ctx)
 
 	return &Ingester{
-		Events:   events,
-		detector: detector,
-		cancel:   cancel,
+		Events:          events,
+		detector:        detector,
+		cancel:          cancel,
+		SessionProvider: cfg.SessionProvider,
 	}, nil
 }
 

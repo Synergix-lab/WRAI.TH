@@ -52,7 +52,11 @@ func startServer() {
 	}
 	defer database.Close()
 
-	ingester, err := ingest.New(ingest.Config{})
+	ingester, err := ingest.New(ingest.Config{
+		SessionProvider: func() map[string]bool {
+			return database.GetKnownSessionIDs()
+		},
+	})
 	if err != nil {
 		log.Fatalf("failed to init ingester: %v", err)
 	}

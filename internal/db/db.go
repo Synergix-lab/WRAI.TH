@@ -164,6 +164,9 @@ func migrate(conn *sql.DB) error {
 
 	// Hierarchy migration (idempotent — ALTER fails if column exists).
 	conn.Exec(`ALTER TABLE agents ADD COLUMN reports_to TEXT`)
+
+	// Session ID for activity tracking (idempotent).
+	conn.Exec(`ALTER TABLE agents ADD COLUMN session_id TEXT`)
 	conn.Exec(`ALTER TABLE messages ADD COLUMN project TEXT NOT NULL DEFAULT 'default'`)
 	conn.Exec(`ALTER TABLE conversations ADD COLUMN project TEXT NOT NULL DEFAULT 'default'`)
 
