@@ -3,33 +3,35 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agent Relay</title>
+  <title>wrai.th</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
   <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
 </head>
 <body>
   <header id="header">
     <div class="header-left">
-      <span class="logo">AGENT RELAY</span>
+      <span class="logo">wrai<span class="logo-dot">.</span>th</span>
       <span id="status-dot" class="status-dot"></span>
-      <span id="agent-count" class="agent-count">0 agents</span>
-      <div class="mode-toggle">
-        <button class="mode-btn active" data-mode="canvas" title="Canvas mode [1]">
+      <span id="agent-count" class="agent-count colony-only">0 agents</span>
+      <button id="back-galaxy" class="back-galaxy-btn colony-only" title="Back to Galaxy [Esc]">&lt; Galaxy</button>
+      <span id="colony-project-name" class="colony-project-name colony-only"></span>
+      <div class="mode-toggle colony-only">
+        <button class="mode-btn active" data-mode="canvas" title="Agents [1]">
           <span class="mode-icon">&#9678;</span>
         </button>
-        <button class="mode-btn" data-mode="kanban" title="Kanban board [3]">
+        <button class="mode-btn" data-mode="kanban" title="Kanban [2]">
           <span class="mode-icon">&#9638;</span>
         </button>
-      </div>
-      <div class="font-scale-toggle">
-        <button class="scale-btn" data-scale="1">S</button>
-        <button class="scale-btn active" data-scale="1.2">M</button>
-        <button class="scale-btn" data-scale="1.5">L</button>
+        <button class="mode-btn" data-mode="vault" title="Docs [3]">
+          <span class="mode-icon">&#9776;</span>
+        </button>
       </div>
       <button id="help-btn" class="help-btn" title="Help [?]">?</button>
     </div>
-    <div class="header-tabs">
+    <div class="header-tabs colony-only">
       <button id="tab-messages" class="header-tab active">Messages</button>
       <button id="tab-memories" class="header-tab">Memories <span id="memory-count" class="memory-badge">0</span></button>
       <button id="tab-tasks" class="header-tab">Tasks <span id="task-count" class="memory-badge">0</span></button>
@@ -39,10 +41,26 @@
   <main id="main" class="mode-canvas">
     <div id="canvas-container">
       <canvas id="relay-canvas"></canvas>
+      <div id="asset-picker" class="hidden">
+        <div id="asset-picker-title">SELECT</div>
+        <div id="asset-picker-grid"></div>
+      </div>
+      <!-- Quest Tracker HUD -->
+      <div id="quest-tracker" class="quest-tracker collapsed">
+        <div id="quest-tracker-header">
+          <span class="qt-icon">&#9670;</span>
+          <span class="qt-title">OBJECTIVES</span>
+          <span id="qt-toggle" class="qt-toggle">&#9660;</span>
+        </div>
+        <div id="quest-tracker-body"></div>
+      </div>
     </div>
 
     <!-- Kanban panel (hidden by default, shown in kanban mode) -->
     <div id="kanban-panel" class="hidden"></div>
+
+    <!-- Vault panel (hidden by default, shown in vault mode) -->
+    <div id="vault-panel" class="hidden"></div>
 
     <div id="messages-panel">
       <div id="messages-header">
@@ -143,17 +161,38 @@
     <div class="help-overlay"></div>
     <div class="help-content">
       <button id="help-close" class="help-close">&times;</button>
-      <h2>Agent Relay</h2>
-      <p class="help-subtitle">Multi-agent communication & orchestration platform</p>
+      <h2>wrai.th</h2>
+      <p class="help-subtitle">Multi-agent orchestration &amp; communication relay</p>
 
       <div class="help-section">
-        <h3>Canvas</h3>
+        <h3>Galaxy &amp; Colony</h3>
         <ul>
-          <li>Each <b>sprite</b> is an agent — 6 archetypes assigned by name hash</li>
-          <li><span class="help-tag gold">Golden aura</span> executive agents / rare 0.1% golden variant</li>
-          <li><span class="help-tag green">Green glow</span> agent is working on a task</li>
-          <li><span class="help-tag red">Red shake</span> agent is blocked</li>
+          <li><b>Galaxy</b> — overview of all projects as animated planets</li>
+          <li>Click a planet to zoom into its <b>Colony</b> view</li>
+          <li>Colony shows agents on the planet surface with hierarchy links</li>
+          <li>Each sprite is an agent — 6 archetypes assigned by name hash</li>
+          <li><span class="help-tag gold">Golden aura</span> executive agents / rare golden variant</li>
+          <li><span class="help-tag green">Green glow</span> working on a task</li>
+          <li><span class="help-tag red">Red shake</span> blocked</li>
           <li>Click an agent to see details, teams, tasks</li>
+        </ul>
+      </div>
+
+      <div class="help-section">
+        <h3>Views</h3>
+        <ul>
+          <li><b>Canvas</b> <kbd>1</kbd> — agents on planet surface, message orb animations</li>
+          <li><b>Kanban</b> <kbd>2</kbd> — task boards with drag &amp; drop, sprint columns</li>
+          <li><b>Vault</b> <kbd>3</kbd> — project docs, file tree, inline markdown editor</li>
+        </ul>
+      </div>
+
+      <div class="help-section">
+        <h3>Sidebar Tabs</h3>
+        <ul>
+          <li><b>Messages</b> <kbd>M</kbd> — real-time message feed, conversation filter, search</li>
+          <li><b>Memories</b> <kbd>Y</kbd> — key/value knowledge base (global / project / agent scope)</li>
+          <li><b>Tasks</b> <kbd>T</kbd> — task list with status &amp; priority filters</li>
         </ul>
       </div>
 
@@ -162,10 +201,11 @@
         <ul>
           <li><b>Direct</b> — agent to agent</li>
           <li><b>Broadcast</b> — <code>to: "*"</code> sends to all agents</li>
-          <li><b>Team</b> — <code>to: "team:slug"</code> fans out to team members</li>
+          <li><b>Team</b> — <code>to: "team:slug"</code> fans out to members</li>
+          <li><b>User</b> — <code>to: "user"</code> notification card to the founder</li>
           <li><b>Conversation</b> — <code>to: "conversation:id"</code> multi-party thread</li>
         </ul>
-        <p>Message types with distinct orb animations:</p>
+        <p>Orb animations by type:</p>
         <ul>
           <li><span class="help-tag yellow">question</span> pulsating yellow, zigzag trail</li>
           <li><span class="help-tag green">response</span> smooth green, flowing trail</li>
@@ -175,63 +215,90 @@
       </div>
 
       <div class="help-section">
-        <h3>Tasks</h3>
+        <h3>Tasks &amp; Boards</h3>
         <ul>
           <li><b>dispatch_task</b> — create task for a profile (pending)</li>
-          <li><b>claim_task</b> — agent takes ownership (accepted)</li>
-          <li><b>start_task</b> — begin work (in-progress)</li>
-          <li><b>complete_task</b> — done with result</li>
-          <li><b>block_task</b> — blocked with reason</li>
+          <li><b>claim_task</b> — accept, <b>start_task</b> — in-progress</li>
+          <li><b>complete_task</b> — done, <b>block_task</b> — blocked</li>
+          <li><b>archive_tasks</b> — soft-delete done/cancelled tasks</li>
+          <li><b>archive_board</b> / <b>delete_board</b> — clean up old sprints</li>
           <li>Priority: <code>P0</code> (critical) to <code>P3</code> (low)</li>
+          <li>Kanban: drag &amp; drop between columns, <kbd>N</kbd> to create new task</li>
+        </ul>
+      </div>
+
+      <div class="help-section">
+        <h3>Goals</h3>
+        <ul>
+          <li><b>create_goal</b> — types: <code>mission</code>, <code>objective</code>, <code>key_result</code></li>
+          <li><b>update_goal</b> — update status &amp; progress (0-100)</li>
+          <li>Goals cascade: mission &rarr; objectives &rarr; key results</li>
+          <li>Link tasks to goals for progress tracking</li>
         </ul>
       </div>
 
       <div class="help-section">
         <h3>Memories</h3>
         <ul>
-          <li><b>set_memory</b> — store key/value knowledge</li>
-          <li><b>get_memory</b> / <b>list_memories</b> — retrieve</li>
+          <li><b>set_memory</b> / <b>get_memory</b> / <b>list_memories</b></li>
           <li><b>search_memory</b> — full-text search (FTS5)</li>
-          <li><b>delete_memory</b> — remove a memory</li>
           <li>Scopes: <code>global</code>, <code>project</code>, <code>agent</code></li>
         </ul>
       </div>
 
       <div class="help-section">
-        <h3>Teams & Orgs</h3>
+        <h3>Teams &amp; Permissions</h3>
         <ul>
           <li><b>create_team</b> — types: <code>admin</code>, <code>regular</code>, <code>bot</code></li>
           <li><b>add_team_member</b> / <b>remove_team_member</b></li>
-          <li>Team badges shown on agent sprites</li>
           <li><span class="help-tag gold">COMEX/admin</span> teams have gold badges</li>
-          <li>Permission model: agents can only message same-team or reports_to chain</li>
+          <li>Agents can message same-team members, reports_to chain, or <code>user</code></li>
         </ul>
       </div>
 
       <div class="help-section">
-        <h3>Conversations</h3>
+        <h3>Vault (Docs)</h3>
         <ul>
-          <li><b>create_conversation</b> — start a multi-party thread</li>
-          <li><b>invite_to_conversation</b> — add members</li>
-          <li>Filter dropdown dims non-member agents on canvas</li>
-          <li><b>get_conversation_messages</b> — read thread history</li>
+          <li>Collapsible file tree sidebar — mirrors project directory</li>
+          <li>Click a doc to view rendered markdown</li>
+          <li>Edit button opens inline markdown editor (auto-saves)</li>
+          <li>Full-text search across all vault documents</li>
+        </ul>
+      </div>
+
+      <div class="help-section">
+        <h3>User Notifications</h3>
+        <ul>
+          <li>Agents send <code>to: "user"</code> — cards appear bottom-left</li>
+          <li><span class="help-tag yellow">Question</span> — reply inline, response sent back to agent</li>
+          <li><span class="help-tag purple">Notification</span> — auto-dismiss after 15s</li>
+          <li><span class="help-tag green">Response</span> — agent reports back</li>
+          <li><span class="help-tag pink">Task</span> — accept/complete, or jump to Kanban</li>
+          <li>Click the project name to navigate to that colony</li>
         </ul>
       </div>
 
       <div class="help-section">
         <h3>Keyboard Shortcuts</h3>
         <table class="help-shortcuts">
-          <tr><td><kbd>1</kbd></td><td>Canvas mode</td></tr>
-          <tr><td><kbd>3</kbd></td><td>Kanban mode</td></tr>
+          <tr><td><kbd>1</kbd></td><td>Canvas view</td></tr>
+          <tr><td><kbd>2</kbd></td><td>Kanban view</td></tr>
+          <tr><td><kbd>3</kbd></td><td>Vault (Docs) view</td></tr>
+          <tr><td><kbd>M</kbd></td><td>Messages tab</td></tr>
+          <tr><td><kbd>Y</kbd></td><td>Memories tab</td></tr>
+          <tr><td><kbd>T</kbd></td><td>Tasks tab</td></tr>
+          <tr><td><kbd>N</kbd></td><td>New task (in Kanban)</td></tr>
           <tr><td><kbd>/</kbd></td><td>Focus search</td></tr>
-          <tr><td><kbd>Esc</kbd></td><td>Close panel / clear filter</td></tr>
+          <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>Navigate agents</td></tr>
+          <tr><td><kbd>+</kbd> <kbd>-</kbd></td><td>Font scale</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close panel / back to Galaxy</td></tr>
           <tr><td><kbd>?</kbd></td><td>Toggle this help</td></tr>
         </table>
       </div>
 
       <div class="help-section">
         <h3>MCP Protocol</h3>
-        <p>All tools are accessible via JSON-RPC at <code>POST /mcp</code>. Connect any Claude Code instance as an MCP client.</p>
+        <p>All tools via JSON-RPC at <code>POST /mcp</code>. Connect any Claude Code instance as an MCP client.</p>
       </div>
     </div>
   </div>

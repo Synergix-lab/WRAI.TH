@@ -1,13 +1,15 @@
 // kanban.js — Tokyo Neon Night Kanban Board
 // 8-bit aesthetic task board for agent-relay dashboard
 
-const STATUS_ORDER = ['pending', 'accepted', 'in-progress', 'done', 'blocked'];
+const STATUS_ORDER = ['pending', 'accepted', 'in-progress', 'done', 'blocked', 'cancelled'];
 
 const VALID_TRANSITIONS = {
-  'pending':     ['accepted', 'in-progress'],
-  'accepted':    ['in-progress'],
-  'in-progress': ['done', 'blocked'],
-  'blocked':     ['in-progress'],
+  'pending':     ['accepted', 'in-progress', 'cancelled'],
+  'accepted':    ['in-progress', 'done', 'cancelled'],
+  'in-progress': ['done', 'blocked', 'cancelled'],
+  'blocked':     ['in-progress', 'done', 'cancelled'],
+  'done':        ['cancelled'],
+  'cancelled':   [],
 };
 
 const STATUS_COLORS = {
@@ -16,6 +18,7 @@ const STATUS_COLORS = {
   'in-progress': '#00e676',
   'done':        '#636e72',
   'blocked':     '#ff6b6b',
+  'cancelled':   '#b2bec3',
 };
 
 const PRIORITY_COLORS = {
@@ -31,6 +34,7 @@ const STATUS_LABELS = {
   'in-progress': 'IN PROGRESS',
   'done':        'DONE',
   'blocked':     'BLOCKED',
+  'cancelled':   'CANCELLED',
 };
 
 function timeAgo(dateStr) {
@@ -237,6 +241,15 @@ const KANBAN_STYLES = `
 .kb-card.kb-founder {
   border-left: 3px solid #ffd93d;
   background: rgba(255,217,61,0.06);
+}
+.kb-card.kb-highlight {
+  animation: kb-flash 0.6s ease-in-out 3;
+  border-color: rgba(108,92,231,0.8);
+  box-shadow: 0 0 16px rgba(108,92,231,0.3), 0 0 4px rgba(108,92,231,0.2);
+}
+@keyframes kb-flash {
+  0%, 100% { box-shadow: 0 0 16px rgba(108,92,231,0.3); }
+  50% { box-shadow: 0 0 24px rgba(108,92,231,0.6), 0 0 8px rgba(108,92,231,0.4); border-color: rgba(108,92,231,1); }
 }
 .kb-founder-tag {
   font-size: 8px;
@@ -605,7 +618,10 @@ export class KanbanBoard {
     this.container = container;
     this.tasks = [];
     this.boards = [];
+    this.goals = [];
+    this.goalMap = new Map(); // id -> goal
     this.selectedBoard = null; // null = all tasks
+    this.selectedGoal = null;  // null = all goals
     this.showDone = false;
     this.expandedCard = null;
     this.dragTaskId = null;
@@ -652,12 +668,29 @@ export class KanbanBoard {
     this._render();
   }
 
+  setGoals(goals) {
+    this.goals = goals || [];
+    this.goalMap.clear();
+    for (const g of this.goals) {
+      this.goalMap.set(g.id, g);
+    }
+    this._render();
+  }
+
   show() {
     this.root.style.display = 'flex';
   }
 
   hide() {
     this.root.style.display = 'none';
+  }
+
+  highlightTask(taskId) {
+    const card = this.root.querySelector(`[data-task-id="${taskId}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('kb-highlight');
+    setTimeout(() => card.classList.remove('kb-highlight'), 2500);
   }
 
   destroy() {
@@ -671,6 +704,15 @@ export class KanbanBoard {
   /* ─── Rendering ─── */
 
   _render() {
+    // Save scroll positions of columns before nuke
+    const scrollPositions = {};
+    this.root.querySelectorAll('.kb-col-body').forEach(body => {
+      const status = body.parentElement?.dataset?.status;
+      if (status && body.scrollTop > 0) scrollPositions[status] = body.scrollTop;
+    });
+    // Save root scroll position
+    const rootScroll = this.root.scrollTop;
+
     this.root.innerHTML = '';
 
     // Header
@@ -692,7 +734,7 @@ export class KanbanBoard {
       allTab.addEventListener('click', () => { this.selectedBoard = null; this._render(); });
       tabs.appendChild(allTab);
 
-      for (const b of this.boards) {
+      for (const b of this.boards.filter(b => !b.archived_at)) {
         const tab = document.createElement('button');
         tab.className = 'kb-tab' + (this.selectedBoard === b.id ? ' kb-tab--active' : '');
         tab.textContent = b.name.toUpperCase();
@@ -702,6 +744,7 @@ export class KanbanBoard {
       }
       titleArea.appendChild(tabs);
     }
+
 
     header.appendChild(titleArea);
 
@@ -735,6 +778,9 @@ export class KanbanBoard {
     if (this.selectedBoard !== null) {
       filtered = filtered.filter(t => t.board_id === this.selectedBoard);
     }
+    if (this.selectedGoal !== null) {
+      filtered = filtered.filter(t => t.goal_id === this.selectedGoal);
+    }
     if (!this.showDone) {
       filtered = filtered.filter(t => t.status !== 'done');
     }
@@ -758,6 +804,13 @@ export class KanbanBoard {
     }
 
     this.root.appendChild(board);
+
+    // Restore scroll positions
+    this.root.scrollTop = rootScroll;
+    this.root.querySelectorAll('.kb-col-body').forEach(body => {
+      const status = body.parentElement?.dataset?.status;
+      if (status && scrollPositions[status]) body.scrollTop = scrollPositions[status];
+    });
   }
 
   _renderColumn(status, tasks) {
@@ -856,6 +909,16 @@ export class KanbanBoard {
     `;
     card.appendChild(top);
 
+    // Goal badge
+    if (task.goal_id && this.goalMap.has(task.goal_id)) {
+      const goal = this.goalMap.get(task.goal_id);
+      const goalBadge = document.createElement('div');
+      goalBadge.style.cssText = 'font-size:9px;font-weight:600;color:#ffd93d;margin-bottom:3px;letter-spacing:0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+      goalBadge.textContent = goal.title;
+      goalBadge.title = `[${goal.type}] ${goal.title}`;
+      card.appendChild(goalBadge);
+    }
+
     // Title
     const title = document.createElement('div');
     title.className = 'kb-card-title';
@@ -946,6 +1009,14 @@ export class KanbanBoard {
     detail.className = 'kb-detail';
 
     let html = '';
+
+    // Goal ancestry
+    if (task.goal_id && this.goalMap.has(task.goal_id)) {
+      const chain = this._buildGoalChain(task.goal_id);
+      if (chain.length > 0) {
+        html += `<div class="kb-detail-row"><span class="kb-detail-label">Goal Cascade</span><div style="margin:3px 0;color:#ffd93d;font-size:10px">${chain.map(g => esc(g.title)).join(' &rsaquo; ')}</div></div>`;
+      }
+    }
 
     if (task.description) {
       html += `<div class="kb-detail-row"><span class="kb-detail-label">Description</span><div class="kb-detail-desc">${esc(task.description)}</div></div>`;
@@ -1103,6 +1174,13 @@ export class KanbanBoard {
         <label>Parent Task ID (optional)</label>
         <input type="text" name="parent_task_id" placeholder="parent-task-uuid" autocomplete="off" />
       </div>
+      <div class="kb-field">
+        <label>Goal (optional)</label>
+        <select name="goal_id">
+          <option value="">— None —</option>
+          ${this.goals.map(g => `<option value="${esc(g.id)}">[${esc(g.type)}] ${esc(g.title)}</option>`).join('')}
+        </select>
+      </div>
       <div class="kb-form-btns">
         <button class="kb-form-btn kb-form-btn--cancel" type="button">Cancel</button>
         <button class="kb-form-btn kb-form-btn--submit" type="button">Dispatch</button>
@@ -1119,11 +1197,13 @@ export class KanbanBoard {
       const description = form.querySelector('[name="description"]').value.trim();
       const priority = form.querySelector('[name="priority"]').value;
       const parentId = form.querySelector('[name="parent_task_id"]').value.trim();
+      const goalId = form.querySelector('[name="goal_id"]').value;
 
       if (!profile || !title) return;
 
       const data = { profile, title, description, priority };
       if (parentId) data.parent_task_id = parentId;
+      if (goalId) data.goal_id = goalId;
 
       if (this.onDispatch) this.onDispatch(data);
       this._closeDispatchForm();
@@ -1224,5 +1304,19 @@ export class KanbanBoard {
     this.root.querySelectorAll('.kb-time[data-dispatched]').forEach(el => {
       el.textContent = timeAgo(el.dataset.dispatched);
     });
+  }
+
+  _buildGoalChain(goalId) {
+    const chain = [];
+    let current = goalId;
+    const visited = new Set();
+    while (current && !visited.has(current) && chain.length < 5) {
+      visited.add(current);
+      const g = this.goalMap.get(current);
+      if (!g) break;
+      chain.unshift(g);
+      current = g.parent_goal_id;
+    }
+    return chain;
   }
 }
