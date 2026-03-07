@@ -18,7 +18,7 @@ export class CanvasEngine {
     const dpr = window.devicePixelRatio || 1;
     this.canvas.width = container.clientWidth * dpr;
     this.canvas.height = container.clientHeight * dpr;
-    this.ctx.scale(dpr, dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.width = container.clientWidth;
     this.height = container.clientHeight;
   }

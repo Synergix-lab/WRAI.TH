@@ -8,6 +8,7 @@ export class ConnectionOverlay {
     this.teams = [];
     this.y = -99999;
     this._pulsePhase = 0;
+    this.showHierarchy = true;
   }
 
   setData(agentViews, teams) {
@@ -21,7 +22,7 @@ export class ConnectionOverlay {
 
   render(ctx) {
     if (!this.agentViews || this.agentViews.size === 0) return;
-    this._renderHierarchy(ctx);
+    if (this.showHierarchy) this._renderHierarchy(ctx);
   }
 
   _renderHierarchy(ctx) {
