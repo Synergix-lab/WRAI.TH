@@ -51,7 +51,7 @@ wrai.th speaks MCP — the open [Model Context Protocol](https://modelcontextpro
 The only contract is a URL:
 
 ```
-http://localhost:8090/mcp?project=my-project
+http://localhost:8090/mcp
 ```
 
 ---
@@ -64,7 +64,7 @@ Each project is a planet — a spinning pixel art world drawn from 9 animated bi
 
 Planets grow with their team. A solo agent gets a small 32px world. A team of 10 maxes out at 64px — a planet that dominates its region of space. As the colony grows, moons appear in orbit — one for every 4 agents, up to 4 moons — each a unique pixel sprite orbiting with depth occlusion.
 
-They float in a procedural starfield, surrounded by nebulae, black holes with accretion disks, asteroid belts, and ring systems catching starlight. This isn't wallpaper. It's alive. More on that [later](#the-cinema).
+They float in a procedural starfield, surrounded by nebulae, black holes with accretion disks, asteroid belts, and ring systems catching starlight. This isn't wallpaper. It's alive.
 
 Click a planet. The camera zooms through space, the planet grows until it fills the screen, and you land on the surface.
 
@@ -154,13 +154,11 @@ Set up wrai.th in this project:
      "mcpServers": {
        "relay": {
          "type": "http",
-         "url": "http://localhost:8090/mcp?project=PROJECT_NAME"
+         "url": "http://localhost:8090/mcp"
        }
      }
    }
    ```
-   Use the current directory name as PROJECT_NAME.
-
 3. Add to `.claude/CLAUDE.md` (create if it doesn't exist):
    "At the start of every session, use the relay MCP: call whoami, then
    register_agent with your name and role."
@@ -207,7 +205,7 @@ docker run -p 8090:8090 ghcr.io/synergix-lab/agent-relay:latest
   "mcpServers": {
     "relay": {
       "type": "http",
-      "url": "http://localhost:8090/mcp?project=my-project"
+      "url": "http://localhost:8090/mcp"
     }
   }
 }
@@ -221,7 +219,7 @@ At the start of any Claude Code session, tell it:
 Use the relay MCP. Call whoami, then register_agent with your name and role.
 ```
 
-The agent appears on the planet surface as a pixel art robot and starts coordinating.
+The agent appears on the planet surface as a pixel art robot and starts coordinating. Built-in documentation is available immediately — call `search_vault` or `list_vault_docs` to explore.
 
 ---
 
@@ -341,6 +339,8 @@ A profile is a reusable role definition — soul, skills, working style, vault p
 | `get_vault_doc` | Full document content by path |
 | `list_vault_docs` | Browse with tag filters |
 
+The relay ships with built-in agent documentation (`docs/`) — boot sequence, messaging, memory, tasks, teams, profiles, vault usage, and common patterns. These docs are embedded in the binary and indexed automatically at startup. Every agent on any project can access them via `search_vault` or `get_vault_doc` without any configuration.
+
 </details>
 
 ---
@@ -357,7 +357,7 @@ flowchart LR
     subgraph R[wrai.th]
         H[handlers.go<br>56 MCP tools]
         DB[(SQLite FTS5<br>agents, messages, memory,<br>tasks, goals, profiles,<br>teams, vault docs)]
-        UI[go:embed<br>Canvas 2D, pixel art,<br>21 cinematic scenes]
+        UI[go:embed<br>Canvas 2D, pixel art,<br>agent docs]
         H <--> DB
         H --> UI
     end
@@ -370,6 +370,15 @@ Single binary. SQLite on disk. No external services. The web UI is embedded via 
 
 ```
 main.go                      Entry point, signal handling
+docs/                        Agent documentation (embedded in binary)
+  boot.md                    Registration, whoami, session context
+  messaging.md               Addressing modes, threading, conversations
+  memory.md                  Scopes, layers, conflicts, RAG
+  tasks.md                   Lifecycle, goal cascade, boards
+  teams.md                   Orgs, permissions, notify channels
+  profiles.md                Archetypes, skills, vault paths
+  vault.md                   Register, search, auto-injection
+  patterns.md                Common multi-agent workflows
 internal/relay/
   relay.go                   MCP + HTTP server setup
   handlers.go                56 tool implementations
@@ -388,7 +397,7 @@ internal/vault/              Markdown file watcher + indexer (fsnotify)
 internal/web/static/
   js/main.js                 Galaxy/Colony state machine, user notifications
   js/world.js                Planet surfaces, hierarchy links, terrain
-  js/space-bg.js             Procedural starfield, narrative engine, 21 scenes
+  js/space-bg.js             Procedural starfield, ambient space effects
   js/space-assets.js         Asset preloader (200+ sprites)
   js/agent-view.js           Robot sprite rendering
   js/robo-sprite.js          6 archetypes, golden variants, animations
