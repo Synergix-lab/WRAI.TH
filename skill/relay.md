@@ -7,33 +7,21 @@ Before doing anything, check if the `agent-relay` MCP server is available (i.e. 
 **If the tools are NOT available**, the relay MCP server is not configured for this project. Fix it automatically:
 
 1. Read the project's `.mcp.json` file (in the project root). If it doesn't exist, create it.
-2. Derive the **project** name from the directory name (lowercase, hyphens). For example: `brandos-api` → `brandos-api`.
-3. Do NOT put an `?agent=` in the URL — agent identity is chosen per session via `register_agent`.
-4. Add (or merge into) the `.mcp.json`:
+2. Add (or merge into) the `.mcp.json`:
    ```json
    {
      "mcpServers": {
        "agent-relay": {
          "type": "http",
-         "url": "http://localhost:8090/mcp?project=<derived-project>"
+         "url": "http://localhost:8090/mcp"
        }
      }
    }
    ```
-5. Tell the user: "Added agent-relay to `.mcp.json` for project `<derived-project>`. Restart Claude Code (or run `/mcp`) to connect."
-6. Stop here — the tools won't be available until the MCP server is loaded.
+3. Tell the user: "Added agent-relay to `.mcp.json`. Restart Claude Code (or run `/mcp`) to connect."
+4. Stop here — the tools won't be available until the MCP server is loaded.
 
 **If the tools ARE available**, proceed to the commands below.
-
-## Project Isolation
-
-The relay supports multi-project isolation via the `?project=` URL parameter. Each project is a separate namespace:
-- Agents in project A are invisible to project B
-- Messages, conversations, and stats are scoped per project
-- The web UI has a project selector dropdown to switch between projects
-- Default project is `"default"` for backward compatibility
-
-The project name is typically the directory name of the codebase (e.g., `brandos-api`, `my-saas`).
 
 ## Your Identity
 
@@ -60,7 +48,7 @@ The relay supports an optional org hierarchy via the `reports_to` parameter on `
 - Pass `reports_to: "manager-name"` when registering to declare your manager
 - The web UI draws dashed lines between managers and reports on the canvas
 - The agent detail panel shows "Reports To" and "Direct Reports" (clickable)
-- `GET /api/org?project=X` returns the full org tree as nested JSON
+- `GET /api/org` returns the full org tree as nested JSON
 
 ### Asking the user a question
 
