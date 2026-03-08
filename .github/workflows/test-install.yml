@@ -60,6 +60,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Run installer
         run: bash install.sh --no-service --skip-projects
 
@@ -82,11 +86,12 @@ jobs:
       - name: Verify binary
         shell: pwsh
         run: |
-          $binPath = Join-Path $env:LOCALAPPDATA "Programs\agent-relay\agent-relay.exe"
+          $binPath = Join-Path $env:LOCALAPPDATA "AgentRelay\agent-relay.exe"
           if (Test-Path $binPath) {
             & $binPath --version
           } else {
             Write-Error "Binary not found at $binPath"
+            Get-ChildItem $env:LOCALAPPDATA -Recurse -Filter "agent-relay*" | Select FullName
             exit 1
           }
 
