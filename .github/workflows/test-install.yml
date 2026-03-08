@@ -1,6 +1,9 @@
 name: Test Installers
 
 on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   push:
     paths:
       - 'install.sh'
@@ -15,6 +18,7 @@ on:
 jobs:
   test-linux:
     name: Linux ${{ matrix.distro }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
