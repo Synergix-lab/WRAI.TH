@@ -660,11 +660,14 @@ export class KanbanBoard {
 
   setTasks(tasks) {
     this.tasks = tasks || [];
+    // Don't re-render while user is interacting with a form
+    if (this._overlay) return;
     this._render();
   }
 
   setBoards(boards) {
     this.boards = boards || [];
+    if (this._overlay) return;
     this._render();
   }
 
@@ -674,6 +677,7 @@ export class KanbanBoard {
     for (const g of this.goals) {
       this.goalMap.set(g.id, g);
     }
+    if (this._overlay) return;
     this._render();
   }
 
@@ -1237,6 +1241,8 @@ export class KanbanBoard {
       document.removeEventListener('keydown', this._formEscHandler);
       this._formEscHandler = null;
     }
+    // Re-render with latest data that may have arrived while form was open
+    this._render();
   }
 
   /* ─── Edit Form ─── */
