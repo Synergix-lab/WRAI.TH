@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/wraith-logo.jpeg" alt="wrai.th" width="200">
+<img src="docs/assets/wraith-banner.webp" alt="wrai.th" width="700">
 
 # wrai.th
 
