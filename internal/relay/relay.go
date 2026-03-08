@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"agent-relay/internal/config"
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/vault"
@@ -23,11 +24,12 @@ type Relay struct {
 	Ingester     *ingest.Ingester
 	VaultWatcher *vault.Watcher
 	Events       *EventBus
+	Config       config.Config
 	httpServer   *http.Server
 }
 
 // New creates a fully wired Relay with all tools registered.
-func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher) *Relay {
+func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher, cfg config.Config) *Relay {
 	mcpSrv := server.NewMCPServer(
 		"agent-relay",
 		"1.0.0",
@@ -127,6 +129,7 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 		Ingester:     ingester,
 		VaultWatcher: vaultWatcher,
 		Events:       events,
+		Config:       cfg,
 	}
 }
 
@@ -150,8 +153,19 @@ func (r *Relay) ListenAndServe(addr string) error {
 	}
 	mux.Handle("/", http.FileServerFS(staticFS))
 
-	r.httpServer = &http.Server{Addr: addr, Handler: mux}
+	handler := r.buildMiddlewareChain(mux)
+	r.httpServer = &http.Server{Addr: addr, Handler: handler}
 	return r.httpServer.ListenAndServe()
+}
+
+// buildMiddlewareChain wraps the mux with security middleware.
+// Order: CORS (outermost) → RateLimit → BodyLimit → Auth → handler.
+func (r *Relay) buildMiddlewareChain(handler http.Handler) http.Handler {
+	handler = authMiddleware(r.Config.APIKey, handler)
+	handler = bodySizeLimitMiddleware(r.Config.MaxBody, handler)
+	handler = rateLimitMiddleware(r.Config.RateLimit, handler)
+	handler = corsMiddleware(r.Config.CORSOrigins, handler)
+	return handler
 }
 
 // Shutdown gracefully stops the HTTP server.

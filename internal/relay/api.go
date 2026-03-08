@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,12 @@ import (
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/models"
 )
+
+// apiError logs the full error server-side and returns a safe message to the client.
+func apiError(w http.ResponseWriter, status int, msg string, err error) {
+	log.Printf("API error: %s: %v", msg, err)
+	http.Error(w, fmt.Sprintf(`{"error":"%s"}`, msg), status)
+}
 
 // ServeAPI handles REST API requests for the web UI.
 func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
@@ -706,7 +713,7 @@ func (r *Relay) apiResolveMemoryConflict(w http.ResponseWriter, req *http.Reques
 
 	mem, err := r.DB.ResolveConflict(body.Project, "user", key, body.ChosenValue, body.Scope)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		apiError(w, http.StatusInternalServerError, "failed to resolve conflict", err)
 		return
 	}
 	writeJSON(w, map[string]any{"resolved": true, "memory": mem})
@@ -963,7 +970,7 @@ func (r *Relay) apiDispatchTask(w http.ResponseWriter, req *http.Request) {
 
 	task, err := r.DB.DispatchTask(body.Project, body.Profile, "user", body.Title, body.Description, body.Priority, body.ParentTaskID, body.BoardID, body.GoalID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		apiError(w, http.StatusInternalServerError, "failed to dispatch task", err)
 		return
 	}
 	writeJSON(w, task)
@@ -1018,7 +1025,7 @@ func (r *Relay) apiTransitionTask(w http.ResponseWriter, req *http.Request, path
 		return
 	}
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+		apiError(w, http.StatusBadRequest, "task transition failed", err)
 		return
 	}
 	writeJSON(w, task)
@@ -1048,7 +1055,7 @@ func (r *Relay) apiUpdateTask(w http.ResponseWriter, req *http.Request, path str
 
 	task, err := r.DB.UpdateTaskFields(taskID, body.Project, body.Title, body.Description, body.Priority)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+		apiError(w, http.StatusBadRequest, "failed to update task", err)
 		return
 	}
 	writeJSON(w, task)
@@ -1067,7 +1074,7 @@ func (r *Relay) apiDeleteTask(w http.ResponseWriter, req *http.Request, path str
 	}
 
 	if err := r.DB.DeleteTask(taskID, project); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		apiError(w, http.StatusInternalServerError, "failed to delete task", err)
 		return
 	}
 	writeJSON(w, map[string]any{"deleted": true, "id": taskID})
@@ -1257,7 +1264,7 @@ func (r *Relay) apiCreateGoal(w http.ResponseWriter, req *http.Request) {
 
 	goal, err := r.DB.CreateGoal(body.Project, body.Type, body.Title, body.Description, "user", body.OwnerAgent, body.ParentGoalID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		apiError(w, http.StatusInternalServerError, "failed to create goal", err)
 		return
 	}
 	writeJSON(w, goal)
@@ -1286,7 +1293,7 @@ func (r *Relay) apiUpdateGoal(w http.ResponseWriter, req *http.Request, path str
 
 	goal, err := r.DB.UpdateGoal(goalID, body.Project, body.Title, body.Description, body.Status)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+		apiError(w, http.StatusBadRequest, "failed to update goal", err)
 		return
 	}
 	writeJSON(w, goal)
@@ -1486,7 +1493,7 @@ func (r *Relay) apiUpdateVaultDoc(w http.ResponseWriter, req *http.Request, path
 	}
 
 	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"failed to write file: %v"}`, err), http.StatusInternalServerError)
+		apiError(w, http.StatusInternalServerError, "failed to write vault file", err)
 		return
 	}
 

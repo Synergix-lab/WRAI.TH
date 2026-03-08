@@ -21,7 +21,7 @@ func New() (*DB, error) {
 	}
 
 	dbDir := filepath.Join(home, ".agent-relay")
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
+	if err := os.MkdirAll(dbDir, 0700); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
 

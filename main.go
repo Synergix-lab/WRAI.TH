@@ -10,6 +10,7 @@ import (
 
 	"agent-relay/docs"
 	"agent-relay/internal/cli"
+	"agent-relay/internal/config"
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/relay"
@@ -46,7 +47,8 @@ func main() {
 
 func startServer() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("agent-relay starting...")
+
+	cfg := config.Load()
 
 	database, err := db.New()
 	if err != nil {
@@ -70,7 +72,7 @@ func startServer() {
 	vaultWatcher.Start()
 	defer vaultWatcher.Stop()
 
-	r := relay.New(database, ingester, vaultWatcher)
+	r := relay.New(database, ingester, vaultWatcher, cfg)
 
 	addr := ":8090"
 	if v := os.Getenv("PORT"); v != "" {
@@ -91,6 +93,23 @@ func startServer() {
 			log.Printf("[ingest] %s session=%s tool=%s activity=%s", evt.Type, evt.SessionID, evt.Tool, evt.Activity)
 		}
 	}()
+
+	// Startup log with security status.
+	authStatus := "disabled"
+	if cfg.APIKey != "" {
+		authStatus = "enabled"
+	}
+	corsStatus := "same-origin"
+	if len(cfg.CORSOrigins) > 0 {
+		corsStatus = fmt.Sprintf("%v", cfg.CORSOrigins)
+	}
+	rateLimitStatus := "disabled"
+	if cfg.RateLimit > 0 {
+		rateLimitStatus = fmt.Sprintf("%d/min", cfg.RateLimit)
+	}
+	log.Printf("agent-relay starting on %s", addr)
+	log.Printf("  auth: %s | cors: %s | max body: %dB | rate limit: %s",
+		authStatus, corsStatus, cfg.MaxBody, rateLimitStatus)
 
 	go func() {
 		log.Printf("listening on %s (UI: http://localhost%s)", addr, addr)

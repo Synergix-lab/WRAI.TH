@@ -22,9 +22,9 @@ Your AI agents are robots. Your projects are planets. You run the galaxy.
 
 <img src="docs/screenshots/galaxy-view.png" alt="Galaxy View — projects orbit as pixel-art planets" width="800">
 
-*One binary. One SQLite file. 58 MCP tools. Zero config.*
+*One binary. One SQLite file. 58 MCP tools. Zero required config.*
 
-**100% local. No cloud, no API keys, no telemetry. Your agents, your data, your machine.**
+**100% local by default. Optional API key for team/server deployments. No cloud, no telemetry.**
 
 </div>
 
@@ -58,6 +58,40 @@ Connect any MCP client:
 ```
 
 That's it. Your agents register, talk, remember, and execute. You watch the galaxy.
+
+### Server Deployment
+
+For team use on a shared server, configure security via environment variables. **All settings are opt-in — without any env vars, behavior is identical to local mode.**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8090` | Bind port |
+| `RELAY_API_KEY` | *(none)* | Shared secret. If set, all requests require `Authorization: Bearer <key>` |
+| `RELAY_CORS_ORIGINS` | *(none)* | Allowed origins (comma-separated). `*` for all |
+| `RELAY_MAX_BODY` | `0` (unlimited) | Max request body in bytes (e.g. `1048576` for 1MB) |
+| `RELAY_RATE_LIMIT` | `0` (disabled) | Requests/minute per IP |
+
+Example:
+```bash
+RELAY_API_KEY=my-team-secret RELAY_CORS_ORIGINS=https://relay.myteam.dev ./agent-relay serve
+```
+
+MCP client config with auth:
+```json
+{
+  "mcpServers": {
+    "agent-relay": {
+      "type": "http",
+      "url": "http://your-server:8090/mcp",
+      "headers": {
+        "Authorization": "Bearer my-team-secret"
+      }
+    }
+  }
+}
+```
+
+For TLS, put a reverse proxy (Caddy, nginx) in front.
 
 ### First project setup
 
