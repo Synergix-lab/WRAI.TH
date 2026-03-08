@@ -1,4 +1,32 @@
+# Binary
 agent-relay
 agent-relay-bin
+agent-relay.exe
+
+# Database
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS
 .DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code (local session data)
+.claude/
+
+# Test artifacts
+test-e2e-*.md
+test.txt
+
+# Temp
+*.tmp
+*.log
+/tmp/
