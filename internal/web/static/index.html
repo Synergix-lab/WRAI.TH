@@ -12,13 +12,18 @@
 </head>
 <body>
   <header id="header">
-    <div class="header-left">
-      <img src="img/wraith-logo.jpeg" alt="wrai.th" class="logo-img"><span class="logo">wrai<span class="logo-dot">.</span>th</span>
+    <div class="header-brand">
+      <img src="img/wraith-logo.jpeg" alt="wrai.th" class="logo-img">
+      <span class="logo">wrai<span class="logo-dot">.</span>th</span>
       <span id="status-dot" class="status-dot"></span>
-      <span id="agent-count" class="agent-count colony-only">0 agents</span>
-      <button id="back-galaxy" class="back-galaxy-btn colony-only" title="Back to Galaxy [Esc]">&lt; Galaxy</button>
-      <span id="colony-project-name" class="colony-project-name colony-only"></span>
-      <div class="mode-toggle colony-only">
+    </div>
+    <div class="header-nav colony-only">
+      <button id="back-galaxy" class="back-galaxy-btn" title="Back to Galaxy [Esc]">&lt; Galaxy</button>
+      <span class="header-sep"></span>
+      <span id="colony-project-name" class="colony-project-name"></span>
+      <span id="agent-count" class="agent-count">0 agents</span>
+      <span class="header-sep"></span>
+      <div class="mode-toggle">
         <button class="mode-btn active" data-mode="canvas" title="Agents [1]">
           <span class="mode-icon">&#9678;</span>
         </button>
@@ -29,12 +34,14 @@
           <span class="mode-icon">&#9776;</span>
         </button>
       </div>
-      <button id="help-btn" class="help-btn" title="Help [?]">?</button>
     </div>
-    <div class="header-tabs colony-only">
-      <button id="tab-messages" class="header-tab active">Messages</button>
-      <button id="tab-memories" class="header-tab">Memories <span id="memory-count" class="memory-badge">0</span></button>
-      <button id="tab-tasks" class="header-tab">Tasks <span id="task-count" class="memory-badge">0</span></button>
+    <div class="header-right">
+      <div class="header-tabs colony-only">
+        <button id="tab-messages" class="header-tab active">Messages</button>
+        <button id="tab-memories" class="header-tab">Memories <span id="memory-count" class="memory-badge">0</span></button>
+        <button id="tab-tasks" class="header-tab">Tasks <span id="task-count" class="memory-badge">0</span></button>
+      </div>
+      <button id="help-btn" class="help-btn" title="Help [?]">?</button>
     </div>
   </header>
 

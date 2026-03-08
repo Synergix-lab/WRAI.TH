@@ -1408,6 +1408,7 @@ func (r *Relay) apiListVaultDocs(w http.ResponseWriter, req *http.Request) {
 	// Return metadata only
 	type docMeta struct {
 		Path      string `json:"path"`
+		Project   string `json:"project"`
 		Title     string `json:"title"`
 		Owner     string `json:"owner"`
 		Tags      string `json:"tags"`
@@ -1417,7 +1418,7 @@ func (r *Relay) apiListVaultDocs(w http.ResponseWriter, req *http.Request) {
 	metas := make([]docMeta, 0, len(docs))
 	for _, d := range docs {
 		metas = append(metas, docMeta{
-			Path: d.Path, Title: d.Title, Owner: d.Owner,
+			Path: d.Path, Project: d.Project, Title: d.Title, Owner: d.Owner,
 			Tags: d.Tags, SizeBytes: d.SizeBytes, UpdatedAt: d.UpdatedAt,
 		})
 	}
