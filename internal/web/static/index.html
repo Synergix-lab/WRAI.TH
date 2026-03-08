@@ -127,38 +127,84 @@
   </main>
 
   <div id="agent-detail" class="detail-panel">
-    <button id="detail-close">&times;</button>
-    <div id="detail-name" class="detail-name"></div>
-    <div id="detail-role" class="detail-field"></div>
-    <div id="detail-desc" class="detail-field"></div>
-    <div id="detail-project" class="detail-field"></div>
-    <div class="detail-section">
-      <div class="detail-label">Status</div>
-      <div id="detail-status" class="detail-value"></div>
+    <button id="detail-close" title="Close [Esc]">
+      <img src="img/ui/icons/small/x_big.png" alt="Close" class="detail-close-icon">
+    </button>
+
+    <!-- ═══ MACRO: Identity + live status at a glance ═══ -->
+    <div class="dp-hero">
+      <div class="dp-hero-identity">
+        <div id="detail-name" class="detail-name"></div>
+        <div id="detail-role" class="dp-role"></div>
+      </div>
+      <div class="dp-hero-status">
+        <span id="detail-status-dot" class="dp-status-dot"></span>
+        <span id="detail-status" class="dp-status-text"></span>
+      </div>
+      <div id="detail-activity" class="dp-activity"></div>
     </div>
-    <div class="detail-section">
-      <div class="detail-label">Last Seen</div>
-      <div id="detail-last-seen" class="detail-value"></div>
+
+    <!-- Current task — the single most important info -->
+    <div id="detail-current-task" class="dp-current-task"></div>
+
+    <div class="detail-divider"></div>
+
+    <!-- ═══ MICRO: Expandable detail sections ═══ -->
+    <div id="detail-desc" class="dp-desc"></div>
+    <div id="detail-project" class="dp-project"></div>
+
+    <!-- Stats -->
+    <div class="dp-section">
+      <div class="dp-section-header" data-toggle="dp-stats-body">COMMS</div>
+      <div id="dp-stats-body" class="dp-section-body">
+        <div class="detail-row"><span class="detail-label">Last Seen</span><span id="detail-last-seen" class="detail-value"></span></div>
+        <div class="detail-row"><span class="detail-label">Registered</span><span id="detail-registered" class="detail-value"></span></div>
+      </div>
     </div>
-    <div class="detail-section">
-      <div class="detail-label">Registered</div>
-      <div id="detail-registered" class="detail-value"></div>
+
+    <!-- Hierarchy -->
+    <div class="dp-section">
+      <div class="dp-section-header" data-toggle="dp-hierarchy-body">HIERARCHY</div>
+      <div id="dp-hierarchy-body" class="dp-section-body">
+        <div class="detail-row"><span class="detail-label">Reports To</span><span id="detail-reports-to" class="detail-value"></span></div>
+        <div class="dp-sub"><span class="detail-label">Direct Reports</span></div>
+        <div id="detail-direct-reports" class="detail-value"></div>
+      </div>
     </div>
-    <div class="detail-section">
-      <div class="detail-label">Reports To</div>
-      <div id="detail-reports-to" class="detail-value"></div>
+
+    <!-- Teams -->
+    <div class="dp-section">
+      <div class="dp-section-header" data-toggle="dp-teams-body">TEAMS</div>
+      <div id="dp-teams-body" class="dp-section-body">
+        <div id="detail-teams" class="detail-value"></div>
+      </div>
     </div>
-    <div class="detail-section">
-      <div class="detail-label">Direct Reports</div>
-      <div id="detail-direct-reports" class="detail-value"></div>
+
+    <!-- Recent comms -->
+    <div class="dp-section">
+      <div class="dp-section-header" data-toggle="dp-comms-body">RECENT COMMS</div>
+      <div id="dp-comms-body" class="dp-section-body">
+        <div id="detail-recent-msgs" class="detail-value"></div>
+      </div>
     </div>
-    <div class="detail-section">
-      <div class="detail-label">Teams</div>
-      <div id="detail-teams" class="detail-value"></div>
+
+    <!-- All tasks -->
+    <div class="dp-section">
+      <div class="dp-section-header" data-toggle="dp-tasks-body">TASKS</div>
+      <div id="dp-tasks-body" class="dp-section-body">
+        <div id="detail-tasks" class="detail-value"></div>
+      </div>
     </div>
-    <div id="detail-tasks-section" class="detail-section">
-      <div class="detail-label">Tasks</div>
-      <div id="detail-tasks" class="detail-value"></div>
+
+    <!-- Nav arrows -->
+    <div class="dp-nav">
+      <button id="dp-nav-prev" class="dp-nav-btn" title="Previous agent [←]">
+        <img src="img/ui/icons/small/arrow_left.png" class="dp-nav-icon">
+      </button>
+      <span id="dp-nav-label" class="dp-nav-label"></span>
+      <button id="dp-nav-next" class="dp-nav-btn" title="Next agent [→]">
+        <img src="img/ui/icons/small/arrow_right.png" class="dp-nav-icon">
+      </button>
     </div>
   </div>
 

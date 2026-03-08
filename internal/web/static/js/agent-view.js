@@ -55,6 +55,8 @@ export class AgentView {
     this.glowPhase = Math.random() * Math.PI * 2;
     this.breathPhase = Math.random() * Math.PI * 2;
     this.hovered = false;
+    this.selected = false;       // Canvas selection ring
+    this._selectPhase = 0;       // Animated rotation for selection ring
     this.ripples = [];
     this._blockedPhase = 0;
     this._workingPhase = 0;
@@ -175,6 +177,10 @@ export class AgentView {
     if (this.activity && this.activity !== "idle") {
       this._activityPhase = (this._activityPhase || 0) + dt * 3;
     }
+    // Selection ring rotation
+    if (this.selected) {
+      this._selectPhase += dt * 1.2;
+    }
 
     // Ripples
     for (let i = this.ripples.length - 1; i >= 0; i--) {
@@ -210,7 +216,7 @@ export class AgentView {
       }
 
       ctx.save();
-      ctx.globalAlpha = alpha;
+      ctx.globalAlpha = dimmed ? alpha * 0.25 : alpha;
       ctx.imageSmoothingEnabled = false;
 
       // --- Executive aura (golden halo) ---
@@ -313,6 +319,56 @@ export class AgentView {
         ctx.beginPath();
         ctx.ellipse(dx, dy + 16, 18, 5, 0, 0, Math.PI * 2);
         ctx.fill();
+      }
+
+      // --- Selection ring (game-style rotating dashed circle) ---
+      if (this.selected && !dimmed) {
+        const selR = 38;
+        const pulse = 0.6 + 0.4 * Math.sin(this._selectPhase * 2.5);
+        const segments = 8;
+        const gap = Math.PI / 12;
+
+        ctx.save();
+        ctx.translate(dx, dy - 2);
+        ctx.rotate(this._selectPhase * 0.5);
+
+        // Outer glow
+        ctx.strokeStyle = `rgba(108, 92, 231, ${0.25 * pulse})`;
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(0, 0, selR + 2, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Main dashed ring
+        ctx.lineWidth = 2;
+        for (let i = 0; i < segments; i++) {
+          const a0 = (i / segments) * Math.PI * 2 + gap / 2;
+          const a1 = ((i + 1) / segments) * Math.PI * 2 - gap / 2;
+          ctx.strokeStyle = i % 2 === 0
+            ? `rgba(162, 155, 254, ${0.9 * pulse})`
+            : `rgba(108, 92, 231, ${0.6 * pulse})`;
+          ctx.beginPath();
+          ctx.arc(0, 0, selR, a0, a1);
+          ctx.stroke();
+        }
+
+        // Corner chevrons (4 small arrows at cardinal points)
+        ctx.strokeStyle = `rgba(162, 155, 254, ${0.8 * pulse})`;
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 4; i++) {
+          const angle = (i / 4) * Math.PI * 2;
+          const cx = Math.cos(angle) * (selR + 8);
+          const cy = Math.sin(angle) * (selR + 8);
+          const inward = angle + Math.PI;
+          const chevLen = 4;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(inward + 0.5) * chevLen, cy + Math.sin(inward + 0.5) * chevLen);
+          ctx.lineTo(cx, cy);
+          ctx.lineTo(cx + Math.cos(inward - 0.5) * chevLen, cy + Math.sin(inward - 0.5) * chevLen);
+          ctx.stroke();
+        }
+
+        ctx.restore();
       }
 
       // Draw mech sprite

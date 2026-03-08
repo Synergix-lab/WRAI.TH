@@ -1052,17 +1052,100 @@ function showUserTaskCard(task) {
 
 // --- Agent detail panel ---
 
+// Section toggle logic
+document.querySelectorAll(".dp-section-header[data-toggle]").forEach(header => {
+  // Default: all sections open
+  const bodyId = header.getAttribute("data-toggle");
+  const body = document.getElementById(bodyId);
+  if (body) { body.classList.add("open"); header.classList.add("open"); }
+  header.addEventListener("click", () => {
+    header.classList.toggle("open");
+    if (body) body.classList.toggle("open");
+  });
+});
+
+// Nav buttons
+const dpNavPrev = document.getElementById("dp-nav-prev");
+const dpNavNext = document.getElementById("dp-nav-next");
+const dpNavLabel = document.getElementById("dp-nav-label");
+if (dpNavPrev) dpNavPrev.addEventListener("click", () => {
+  const keys = getAgentKeys();
+  if (!keys.length) return;
+  navIndex = (navIndex - 1 + keys.length) % keys.length;
+  const av = agentViews.get(keys[navIndex]);
+  if (av) { av.triggerRipple(); openDetail(av); }
+});
+if (dpNavNext) dpNavNext.addEventListener("click", () => {
+  const keys = getAgentKeys();
+  if (!keys.length) return;
+  navIndex = (navIndex + 1) % keys.length;
+  const av = agentViews.get(keys[navIndex]);
+  if (av) { av.triggerRipple(); openDetail(av); }
+});
+
+const detailActivity = document.getElementById("detail-activity");
+const detailStatusDot = document.getElementById("detail-status-dot");
+const detailCurrentTask = document.getElementById("detail-current-task");
+
 function openDetail(av) {
+  // Clear previous selection ring
+  for (const [, other] of agentViews) other.selected = false;
+  av.selected = true;
+
   focusedAgent = agentKey(av.project, av.name);
   focusedTeam = null;
   detailPanel.classList.add("open");
+
+  // ── MACRO: Identity ──
   detailName.textContent = av.name;
   detailName.style.color = av.color;
-  detailRole.textContent = av.role || "\u2014";
-  detailDesc.textContent = av.description || "\u2014";
-  detailProject.textContent = av.project !== "default" ? `Project: ${av.project}` : "";
-  detailStatus.textContent = av.online ? "Online" : "Offline";
-  detailStatus.style.color = av.online ? "#00e676" : "#636e72";
+  const detailRoleEl = document.getElementById("detail-role");
+  if (detailRoleEl) detailRoleEl.textContent = av.role || "";
+
+  // Status dot + text
+  if (detailStatusDot) {
+    detailStatusDot.className = "dp-status-dot " + (av.sleeping ? "sleeping" : av.online ? "online" : "offline");
+  }
+  detailStatus.textContent = av.sleeping ? "Sleeping" : av.online ? "Online" : "Offline";
+  detailStatus.style.color = av.sleeping ? "#9b59b6" : av.online ? "#00e676" : "#636e72";
+
+  // Activity
+  if (detailActivity) {
+    if (av.activity && av.activity !== "idle") {
+      const label = av.activityTool || av.activity;
+      detailActivity.textContent = label;
+      detailActivity.style.color = av.activity === "working" ? "#00e676" : "#a29bfe";
+    } else {
+      detailActivity.textContent = "";
+    }
+  }
+
+  // ── MACRO: Current task (hero info) ──
+  if (detailCurrentTask) {
+    const agentTasks = allTasks.filter(t => {
+      const tp = t.project || "default";
+      return tp === av.project && (t.assigned_to === av.name || t.dispatched_by === av.name);
+    }).filter(t => t.status !== "done");
+    const current = agentTasks.find(t => t.status === "in-progress") || agentTasks[0];
+    if (current) {
+      const statusColors = { pending: "#ffd93d", accepted: "#74b9ff", "in-progress": "#00e676", blocked: "#ff6b6b" };
+      const c = statusColors[current.status] || "#636e72";
+      detailCurrentTask.innerHTML = `
+        <div class="dp-current-task-label">Current Task</div>
+        <div class="dp-current-task-title">${escapeHtml(current.title)}</div>
+        <div class="dp-current-task-status" style="color:${c}">${current.status} · ${current.priority}</div>
+      `;
+    } else {
+      detailCurrentTask.innerHTML = "";
+    }
+  }
+
+  // ── MICRO: Details ──
+  const detailDescEl = document.getElementById("detail-desc");
+  if (detailDescEl) detailDescEl.textContent = av.description || "";
+  const detailProjectEl = document.getElementById("detail-project");
+  if (detailProjectEl) detailProjectEl.textContent = av.project !== "default" ? av.project : "";
+
   detailLastSeen.textContent = formatTime(av._lastSeenRaw);
   detailRegistered.textContent = formatTime(av._registeredRaw);
 
@@ -1090,7 +1173,6 @@ function openDetail(av) {
       directReports.push(a.name);
     }
   }
-
   if (directReports.length > 0) {
     detailDirectReports.innerHTML = "";
     const container = document.createElement("div");
@@ -1132,28 +1214,65 @@ function openDetail(av) {
     }
   }
 
-  // Show tasks for this agent
+  // All tasks
   const detailTasksEl = document.getElementById("detail-tasks");
   if (detailTasksEl) {
     const agentTasks = allTasks.filter(t => {
       const tp = t.project || "default";
       return tp === av.project && (t.assigned_to === av.name || t.dispatched_by === av.name);
-    }).filter(t => t.status !== "done").slice(0, 5);
-
+    }).filter(t => t.status !== "done").slice(0, 8);
     if (agentTasks.length > 0) {
       detailTasksEl.innerHTML = agentTasks.map(t => {
         const statusColors = { pending: "#ffd93d", accepted: "#74b9ff", "in-progress": "#00e676", blocked: "#ff6b6b" };
         const color = statusColors[t.status] || "#636e72";
         return `<div class="detail-task-item">
           <span style="color:${color}">[${t.status}]</span>
-          <span>${escapeHtml(t.title.length > 30 ? t.title.slice(0, 28) + "..." : t.title)}</span>
-          <span style="color:#636e72">${t.priority}</span>
+          <span>${escapeHtml(t.title.length > 35 ? t.title.slice(0, 33) + "..." : t.title)}</span>
+          <span style="color:#636e72;margin-left:auto">${t.priority}</span>
         </div>`;
       }).join("");
     } else {
       detailTasksEl.textContent = "\u2014";
     }
   }
+
+  // Recent comms — last 3 messages involving this agent
+  const detailRecentMsgs = document.getElementById("detail-recent-msgs");
+  if (detailRecentMsgs) {
+    client.fetchAllMessagesAllProjects().then(allMsgs => {
+      const agentMsgs = allMsgs.filter(m => {
+        const mp = m.project || "default";
+        return mp === av.project && (m.from === av.name || m.to === av.name);
+      }).slice(-5).reverse();
+
+      if (agentMsgs.length > 0) {
+        detailRecentMsgs.innerHTML = agentMsgs.map(m => {
+          const isSent = m.from === av.name;
+          const peer = isSent ? (m.to || "broadcast") : m.from;
+          const dir = isSent ? "→" : "←";
+          const dirColor = isSent ? "#a29bfe" : "#74b9ff";
+          const preview = m.content.length > 60 ? m.content.slice(0, 58) + "..." : m.content;
+          const conv = m.conversation_id ? conversations.find(c => c.id === m.conversation_id) : null;
+          const convTag = conv ? `<span class="dp-msg-conv">${escapeHtml(conv.title || "conv")}</span>` : "";
+          return `<div class="dp-msg-item">
+            <span class="dp-msg-dir" style="color:${dirColor}">${dir}</span>
+            <span class="dp-msg-peer">${escapeHtml(peer)}</span>
+            ${convTag}
+            <div class="dp-msg-preview">${escapeHtml(preview)}</div>
+            <span class="dp-msg-time">${formatTime(m.created_at)}</span>
+          </div>`;
+        }).join("");
+      } else {
+        detailRecentMsgs.innerHTML = '<span style="color:#5a5e78">No messages</span>';
+      }
+    });
+  }
+
+  // Nav label
+  const keys = getAgentKeys();
+  const currentIdx = keys.indexOf(focusedAgent);
+  if (currentIdx >= 0) navIndex = currentIdx;
+  if (dpNavLabel) dpNavLabel.textContent = `${navIndex + 1} / ${keys.length}`;
 
   // Dim other agents
   for (const [key, other] of agentViews) {
@@ -1162,17 +1281,17 @@ function openDetail(av) {
     other.dimMode = !isFocused;
   }
 
-  // Filter messages to this agent
   loadMessages();
 }
 
 detailClose.addEventListener("click", () => {
   detailPanel.classList.remove("open");
   focusedAgent = null;
-  // Restore all agents
+  // Restore all agents + clear selection ring
   for (const [, av] of agentViews) {
     av.highlighted = true;
     av.dimMode = false;
+    av.selected = false;
   }
   loadMessages();
 });
@@ -1382,6 +1501,11 @@ canvas.addEventListener("click", (e) => {
   detailPanel.classList.remove("open");
   focusedAgent = null;
   focusedTeam = null;
+  for (const [, av] of agentViews) {
+    av.selected = false;
+    av.highlighted = true;
+    av.dimMode = false;
+  }
   loadMessages();
 });
 
@@ -2553,7 +2677,14 @@ shortcuts.register("n", "new-task", "New task", () => {
 
 // Agent navigation with arrows
 let navIndex = -1;
-function getAgentKeys() { return [...agentViews.keys()].sort(); }
+function getAgentKeys() {
+  const all = [...agentViews.keys()].sort();
+  // In colony mode, only navigate agents from the current project
+  if (viewMode === "colony" && colonyProject) {
+    return all.filter(k => k.startsWith(colonyProject + ":"));
+  }
+  return all;
+}
 
 shortcuts.register("ArrowRight", "nav-next", "Next agent", () => {
   const keys = getAgentKeys();
