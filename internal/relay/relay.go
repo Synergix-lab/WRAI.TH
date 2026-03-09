@@ -48,6 +48,7 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 		server.ServerTool{Tool: registerAgentTool(), Handler: handlers.HandleRegisterAgent},
 		server.ServerTool{Tool: sendMessageTool(), Handler: handlers.HandleSendMessage},
 		server.ServerTool{Tool: getInboxTool(), Handler: handlers.HandleGetInbox},
+		server.ServerTool{Tool: ackDeliveryTool(), Handler: handlers.HandleAckDelivery},
 		server.ServerTool{Tool: getThreadTool(), Handler: handlers.HandleGetThread},
 		server.ServerTool{Tool: listAgentsTool(), Handler: handlers.HandleListAgents},
 		server.ServerTool{Tool: markReadTool(), Handler: handlers.HandleMarkRead},

@@ -43,6 +43,11 @@ func StartCleanup(database *db.DB, done <-chan struct{}) {
 				} else if expired > 0 {
 					log.Printf("expired %d message(s)", expired)
 				}
+				if expired, err := database.ExpireDeliveries(); err != nil {
+					log.Printf("expire deliveries error: %v", err)
+				} else if expired > 0 {
+					log.Printf("expired %d delivery(ies)", expired)
+				}
 				database.Optimize()
 			}
 		}

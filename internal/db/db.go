@@ -278,6 +278,27 @@ func migrate(conn *sql.DB) error {
 	)`)
 	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_message_reads_agent ON message_reads(agent_name, project)`)
 
+	// Deliveries (per-recipient message tracking)
+	conn.Exec(`CREATE TABLE IF NOT EXISTS deliveries (
+		id              TEXT PRIMARY KEY,
+		message_id      TEXT NOT NULL,
+		to_agent        TEXT NOT NULL,
+		state           TEXT NOT NULL DEFAULT 'queued',
+		sequence_number INTEGER NOT NULL DEFAULT 0,
+		created_at      TEXT NOT NULL,
+		surfaced_at     TEXT,
+		acknowledged_at TEXT,
+		expired_at      TEXT,
+		project         TEXT NOT NULL DEFAULT 'default',
+		FOREIGN KEY (message_id) REFERENCES messages(id)
+	)`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_deliveries_message ON deliveries(message_id)`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_deliveries_agent_state ON deliveries(to_agent, project, state)`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_deliveries_state ON deliveries(state)`)
+
+	// Backfill deliveries for existing messages
+	migrateDeliveries(conn)
+
 	// Profiles
 	conn.Exec(`CREATE TABLE IF NOT EXISTS profiles (
 		id           TEXT PRIMARY KEY,

@@ -45,6 +45,15 @@ func (d *DB) InsertMessage(project, from, to, msgType, subject, content, metadat
 }
 
 func (d *DB) GetInbox(project, agentName string, unreadOnly bool, limit int) ([]models.Message, error) {
+	// Use delivery-based inbox when deliveries exist
+	if d.HasDeliveries() {
+		return d.GetInboxViaDeliveries(project, agentName, unreadOnly, limit)
+	}
+	return d.getInboxLegacy(project, agentName, unreadOnly, limit)
+}
+
+// getInboxLegacy is the original inbox query for DBs without deliveries.
+func (d *DB) getInboxLegacy(project, agentName string, unreadOnly bool, limit int) ([]models.Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -126,6 +135,8 @@ func (d *DB) MarkRead(messageIDs []string, agentName, project string) (int, erro
 		}
 		n, _ := result.RowsAffected()
 		count += int(n)
+		// Also acknowledge the delivery (backward compat)
+		_ = d.AcknowledgeDeliveryByMessage(id, agentName, project)
 	}
 
 	// Also update conversation_reads for any conversation messages

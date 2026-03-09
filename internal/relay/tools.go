@@ -72,6 +72,14 @@ func getInboxTool() mcp.Tool {
 	)
 }
 
+func ackDeliveryTool() mcp.Tool {
+	return mcp.NewTool(
+		"ack_delivery",
+		mcp.WithDescription("Acknowledge receipt of a message delivery. Transitions delivery state from surfaced to acknowledged. Use the delivery_id returned by get_inbox."),
+		mcp.WithString("delivery_id", mcp.Description("Delivery ID to acknowledge"), mcp.Required()),
+	)
+}
+
 func getThreadTool() mcp.Tool {
 	return mcp.NewTool(
 		"get_thread",

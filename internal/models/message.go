@@ -17,4 +17,6 @@ type Message struct {
 	Priority       string  `json:"priority"`
 	TTLSeconds     int     `json:"ttl_seconds"`
 	ExpiredAt      *string `json:"expired_at,omitempty"`
+	DeliveryID     *string `json:"delivery_id,omitempty"`
+	DeliveryState  *string `json:"delivery_state,omitempty"`
 }

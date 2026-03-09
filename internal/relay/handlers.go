@@ -205,13 +205,16 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		// Add to team inbox
 		_ = h.db.AddToTeamInbox(team.ID, msg.ID)
 
-		// Notify all team members
+		// Create deliveries for team members
 		members, _ := h.db.GetTeamMemberNames(team.ID)
+		var recipients []string
 		for _, member := range members {
 			if member != from {
+				recipients = append(recipients, member)
 				h.registry.Notify(project, member, from, subject, msg.ID)
 			}
 		}
+		_ = h.db.CreateDeliveries(msg.ID, project, recipients)
 
 		return resultJSON(msg)
 	}
@@ -231,6 +234,10 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to send message: %v", err)), nil
 	}
+
+	// Create deliveries
+	recipients, _ := h.db.ResolveRecipients(project, to, from, conversationID)
+	_ = h.db.CreateDeliveries(msg.ID, project, recipients)
 
 	// Push notification
 	if conversationID != nil {
@@ -297,6 +304,12 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 		if m.ConversationID != nil {
 			entry["conversation_id"] = *m.ConversationID
 		}
+		if m.DeliveryID != nil {
+			entry["delivery_id"] = *m.DeliveryID
+		}
+		if m.DeliveryState != nil {
+			entry["delivery_state"] = *m.DeliveryState
+		}
 		formatted[i] = entry
 	}
 
@@ -305,6 +318,17 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 		"count":    len(messages),
 		"messages": formatted,
 	})
+}
+
+func (h *Handlers) HandleAckDelivery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	deliveryID := req.GetString("delivery_id", "")
+	if deliveryID == "" {
+		return mcp.NewToolResultError("delivery_id is required"), nil
+	}
+	if err := h.db.AcknowledgeDelivery(deliveryID); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to acknowledge delivery: %v", err)), nil
+	}
+	return resultJSON(map[string]any{"acknowledged": deliveryID})
 }
 
 func (h *Handlers) HandleGetThread(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
