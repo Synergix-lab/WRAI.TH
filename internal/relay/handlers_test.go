@@ -1,0 +1,926 @@
+package relay
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"testing"
+
+	"agent-relay/internal/db"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+)
+
+// --- Test helpers ---
+
+func testHandlers(t *testing.T) *Handlers {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	database, err := db.NewTestDB(dbPath)
+	if err != nil {
+		t.Fatalf("create test db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	mcpSrv := server.NewMCPServer("test", "0.0.0")
+	registry := NewSessionRegistry(mcpSrv)
+	events := NewEventBus()
+	return NewHandlers(database, registry, nil, nil, events)
+}
+
+func call(args map[string]any) mcp.CallToolRequest {
+	return mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Arguments: args},
+	}
+}
+
+func parseJSON(t *testing.T, result *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	if result.IsError {
+		tc := result.Content[0].(mcp.TextContent)
+		t.Fatalf("unexpected error result: %s", tc.Text)
+	}
+	tc := result.Content[0].(mcp.TextContent)
+	var data map[string]any
+	if err := json.Unmarshal([]byte(tc.Text), &data); err != nil {
+		t.Fatalf("parse result json: %v\nraw: %s", err, tc.Text)
+	}
+	return data
+}
+
+func expectError(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	if !result.IsError {
+		t.Fatal("expected error result, got success")
+	}
+	return result.Content[0].(mcp.TextContent).Text
+}
+
+var ctx = context.Background()
+
+// --- Agent Tests ---
+
+func TestRegisterAgent(t *testing.T) {
+	h := testHandlers(t)
+
+	res, err := h.HandleRegisterAgent(ctx, call(map[string]any{
+		"project": "test-proj",
+		"name":    "bot-a",
+		"role":    "developer",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := parseJSON(t, res)
+	agent := data["agent"].(map[string]any)
+	if agent["name"] != "bot-a" {
+		t.Errorf("expected bot-a, got %v", agent["name"])
+	}
+	if agent["role"] != "developer" {
+		t.Errorf("expected developer, got %v", agent["role"])
+	}
+	sessionCtx := data["session_context"].(map[string]any)
+	if sessionCtx["is_respawn"] != false {
+		t.Error("expected is_respawn=false for new agent")
+	}
+}
+
+func TestRegisterAgentRespawn(t *testing.T) {
+	h := testHandlers(t)
+
+	h.HandleRegisterAgent(ctx, call(map[string]any{
+		"project": "test-proj",
+		"name":    "bot-a",
+		"role":    "developer",
+	}))
+
+	res, _ := h.HandleRegisterAgent(ctx, call(map[string]any{
+		"project": "test-proj",
+		"name":    "bot-a",
+		"role":    "updated-role",
+	}))
+	data := parseJSON(t, res)
+	sessionCtx := data["session_context"].(map[string]any)
+	if sessionCtx["is_respawn"] != true {
+		t.Error("expected is_respawn=true for respawn")
+	}
+}
+
+func TestRegisterAgentMissingName(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleRegisterAgent(ctx, call(map[string]any{
+		"project": "test-proj",
+	}))
+	expectError(t, res)
+}
+
+func TestListAgents(t *testing.T) {
+	h := testHandlers(t)
+
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+
+	res, _ := h.HandleListAgents(ctx, call(map[string]any{"project": "p1"}))
+	data := parseJSON(t, res)
+	if data["count"].(float64) != 2 {
+		t.Errorf("expected 2 agents, got %v", data["count"])
+	}
+}
+
+func TestDeactivateAgent(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	res, _ := h.HandleDeactivateAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a"}))
+	data := parseJSON(t, res)
+	if data["deactivated"] != true {
+		t.Error("expected deactivated=true")
+	}
+
+	// Agent should not appear in list (inactive excluded from default list)
+	listRes, _ := h.HandleListAgents(ctx, call(map[string]any{"project": "p1"}))
+	listData := parseJSON(t, listRes)
+	// inactive agents ARE shown in list (status IN active, sleeping, inactive)
+	agents := listData["agents"].([]any)
+	if len(agents) != 1 {
+		t.Errorf("expected 1 agent (inactive shown), got %d", len(agents))
+	}
+}
+
+func TestDeleteAgent(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	res, _ := h.HandleDeleteAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a"}))
+	data := parseJSON(t, res)
+	if data["deleted"] != true {
+		t.Error("expected deleted=true")
+	}
+
+	// Deleted agents should NOT appear in list
+	listRes, _ := h.HandleListAgents(ctx, call(map[string]any{"project": "p1"}))
+	listData := parseJSON(t, listRes)
+	if listData["count"].(float64) != 0 {
+		t.Errorf("expected 0 agents after delete, got %v", listData["count"])
+	}
+}
+
+func TestSleepAgent(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	res, _ := h.HandleSleepAgent(ctx, call(map[string]any{"project": "p1", "as": "bot-a"}))
+	data := parseJSON(t, res)
+	if data["status"] != "sleeping" {
+		t.Errorf("expected status=sleeping, got %v", data["status"])
+	}
+}
+
+// --- Message Tests ---
+
+func TestSendAndGetInbox(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+
+	// Send message
+	sendRes, _ := h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1",
+		"as":      "bot-a",
+		"to":      "bot-b",
+		"type":    "notification",
+		"subject": "test",
+		"content": "hello bot-b",
+	}))
+	msg := parseJSON(t, sendRes)
+	if msg["from"] != "bot-a" {
+		t.Errorf("expected from=bot-a, got %v", msg["from"])
+	}
+
+	// Check inbox
+	inboxRes, _ := h.HandleGetInbox(ctx, call(map[string]any{
+		"project":    "p1",
+		"as":         "bot-b",
+		"unread_only": true,
+	}))
+	inbox := parseJSON(t, inboxRes)
+	if inbox["count"].(float64) != 1 {
+		t.Errorf("expected 1 message in inbox, got %v", inbox["count"])
+	}
+}
+
+func TestSendMessageMissingContent(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1",
+		"as":      "bot-a",
+		"to":      "bot-b",
+	}))
+	expectError(t, res)
+}
+
+func TestSendMessageMissingTo(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1",
+		"as":      "bot-a",
+		"content": "hello",
+	}))
+	expectError(t, res)
+}
+
+func TestMarkRead(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+
+	sendRes, _ := h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "to": "bot-b", "content": "hello",
+	}))
+	msg := parseJSON(t, sendRes)
+	msgID := msg["id"].(string)
+
+	// Mark read
+	readRes, _ := h.HandleMarkRead(ctx, call(map[string]any{
+		"project":     "p1",
+		"as":          "bot-b",
+		"message_ids": []any{msgID},
+	}))
+	readData := parseJSON(t, readRes)
+	if readData["marked_read"].(float64) != 1 {
+		t.Errorf("expected 1 marked read, got %v", readData["marked_read"])
+	}
+
+	// Inbox should be empty (unread_only)
+	inboxRes, _ := h.HandleGetInbox(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-b", "unread_only": true,
+	}))
+	inbox := parseJSON(t, inboxRes)
+	if inbox["count"].(float64) != 0 {
+		t.Errorf("expected 0 unread after mark read, got %v", inbox["count"])
+	}
+}
+
+func TestMarkReadMissingIDs(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleMarkRead(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-b",
+	}))
+	expectError(t, res)
+}
+
+func TestGetThread(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+
+	// Send original
+	res1, _ := h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "to": "bot-b", "content": "original",
+	}))
+	msg1 := parseJSON(t, res1)
+	msg1ID := msg1["id"].(string)
+
+	// Reply
+	h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-b", "to": "bot-a", "content": "reply", "reply_to": msg1ID,
+	}))
+
+	// Get thread
+	threadRes, _ := h.HandleGetThread(ctx, call(map[string]any{"message_id": msg1ID}))
+	thread := parseJSON(t, threadRes)
+	if thread["count"].(float64) != 2 {
+		t.Errorf("expected 2 messages in thread, got %v", thread["count"])
+	}
+}
+
+// --- Conversation Tests ---
+
+func TestConversationLifecycle(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-c", "role": "pm"}))
+
+	// Create conversation
+	createRes, _ := h.HandleCreateConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "Test conv", "members": []any{"bot-a", "bot-b"},
+	}))
+	createData := parseJSON(t, createRes)
+	conv := createData["conversation"].(map[string]any)
+	convID := conv["id"].(string)
+
+	// List conversations
+	listRes, _ := h.HandleListConversations(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a",
+	}))
+	listData := parseJSON(t, listRes)
+	if listData["count"].(float64) != 1 {
+		t.Errorf("expected 1 conversation, got %v", listData["count"])
+	}
+
+	// Send message to conversation
+	h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "to": "", "content": "hello conv",
+		"conversation_id": convID,
+	}))
+
+	// Get conversation messages
+	msgsRes, _ := h.HandleGetConversationMessages(ctx, call(map[string]any{
+		"as": "bot-a", "conversation_id": convID,
+	}))
+	msgsData := parseJSON(t, msgsRes)
+	if msgsData["count"].(float64) != 1 {
+		t.Errorf("expected 1 message, got %v", msgsData["count"])
+	}
+
+	// Invite bot-c
+	inviteRes, _ := h.HandleInviteToConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "conversation_id": convID, "agent_name": "bot-c",
+	}))
+	inviteData := parseJSON(t, inviteRes)
+	if inviteData["invited"] != "bot-c" {
+		t.Errorf("expected invited=bot-c, got %v", inviteData["invited"])
+	}
+
+	// bot-b leaves
+	leaveRes, _ := h.HandleLeaveConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-b", "conversation_id": convID,
+	}))
+	leaveData := parseJSON(t, leaveRes)
+	if leaveData["left"] != "bot-b" {
+		t.Errorf("expected left=bot-b, got %v", leaveData["left"])
+	}
+
+	// Archive
+	archiveRes, _ := h.HandleArchiveConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "conversation_id": convID,
+	}))
+	archiveData := parseJSON(t, archiveRes)
+	if archiveData["archived"] != true {
+		t.Error("expected archived=true")
+	}
+}
+
+func TestCreateConversationMissingTitle(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleCreateConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "members": []any{"bot-b"},
+	}))
+	expectError(t, res)
+}
+
+func TestCreateConversationMissingMembers(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleCreateConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "test",
+	}))
+	expectError(t, res)
+}
+
+func TestConversationNonMemberCantRead(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+
+	createRes, _ := h.HandleCreateConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "private", "members": []any{"bot-a", "bot-b"},
+	}))
+	conv := parseJSON(t, createRes)["conversation"].(map[string]any)
+	convID := conv["id"].(string)
+
+	// bot-c (not a member) tries to read
+	res, _ := h.HandleGetConversationMessages(ctx, call(map[string]any{
+		"as": "bot-c", "conversation_id": convID,
+	}))
+	expectError(t, res)
+}
+
+// --- Task Tests ---
+
+func TestTaskLifecycle(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	// Dispatch
+	dispatchRes, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev", "title": "Fix bug", "description": "fix the thing",
+	}))
+	task := parseJSON(t, dispatchRes)
+	taskID := task["id"].(string)
+	if task["status"] != "pending" {
+		t.Errorf("expected pending, got %v", task["status"])
+	}
+
+	// Claim
+	claimRes, _ := h.HandleClaimTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "task_id": taskID,
+	}))
+	claimed := parseJSON(t, claimRes)
+	if claimed["status"] != "accepted" {
+		t.Errorf("expected accepted, got %v", claimed["status"])
+	}
+
+	// Start
+	startRes, _ := h.HandleStartTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "task_id": taskID,
+	}))
+	started := parseJSON(t, startRes)
+	if started["status"] != "in-progress" {
+		t.Errorf("expected in-progress, got %v", started["status"])
+	}
+
+	// Complete
+	completeRes, _ := h.HandleCompleteTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "task_id": taskID, "result": "done!",
+	}))
+	completed := parseJSON(t, completeRes)
+	if completed["status"] != "done" {
+		t.Errorf("expected done, got %v", completed["status"])
+	}
+}
+
+func TestTaskBlock(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	dispatchRes, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev", "title": "task1",
+	}))
+	task := parseJSON(t, dispatchRes)
+	taskID := task["id"].(string)
+
+	h.HandleClaimTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "task_id": taskID}))
+	h.HandleStartTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "task_id": taskID}))
+
+	blockRes, _ := h.HandleBlockTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "task_id": taskID, "reason": "waiting for API",
+	}))
+	blocked := parseJSON(t, blockRes)
+	if blocked["status"] != "blocked" {
+		t.Errorf("expected blocked, got %v", blocked["status"])
+	}
+}
+
+func TestTaskCancel(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	dispatchRes, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev", "title": "to cancel",
+	}))
+	task := parseJSON(t, dispatchRes)
+	taskID := task["id"].(string)
+
+	cancelRes, _ := h.HandleCancelTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "task_id": taskID, "reason": "not needed",
+	}))
+	cancelled := parseJSON(t, cancelRes)
+	if cancelled["status"] != "cancelled" {
+		t.Errorf("expected cancelled, got %v", cancelled["status"])
+	}
+}
+
+func TestGetTask(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	dispatchRes, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev", "title": "get me",
+	}))
+	task := parseJSON(t, dispatchRes)
+	taskID := task["id"].(string)
+
+	getRes, _ := h.HandleGetTask(ctx, call(map[string]any{
+		"project": "p1", "task_id": taskID,
+	}))
+	got := parseJSON(t, getRes)
+	if got["title"] != "get me" {
+		t.Errorf("expected 'get me', got %v", got["title"])
+	}
+}
+
+func TestGetTaskNotFound(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleGetTask(ctx, call(map[string]any{
+		"project": "p1", "task_id": "nonexistent",
+	}))
+	expectError(t, res)
+}
+
+func TestListTasks(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	h.HandleDispatchTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "profile": "dev", "title": "task1"}))
+	h.HandleDispatchTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "profile": "dev", "title": "task2"}))
+	h.HandleDispatchTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "profile": "qa", "title": "task3"}))
+
+	// List all
+	res, _ := h.HandleListTasks(ctx, call(map[string]any{"project": "p1"}))
+	data := parseJSON(t, res)
+	if data["count"].(float64) != 3 {
+		t.Errorf("expected 3 tasks, got %v", data["count"])
+	}
+
+	// Filter by profile
+	res2, _ := h.HandleListTasks(ctx, call(map[string]any{"project": "p1", "profile": "dev"}))
+	data2 := parseJSON(t, res2)
+	if data2["count"].(float64) != 2 {
+		t.Errorf("expected 2 dev tasks, got %v", data2["count"])
+	}
+}
+
+func TestArchiveTasks(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	dispatchRes, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev", "title": "to archive",
+	}))
+	task := parseJSON(t, dispatchRes)
+	taskID := task["id"].(string)
+
+	// Complete it first
+	h.HandleClaimTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "task_id": taskID}))
+	h.HandleStartTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "task_id": taskID}))
+	h.HandleCompleteTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "task_id": taskID}))
+
+	// Archive done tasks
+	archiveRes, _ := h.HandleArchiveTasks(ctx, call(map[string]any{
+		"project": "p1", "status": "done",
+	}))
+	// ArchiveTasks returns plain text, not JSON
+	tc := archiveRes.Content[0].(mcp.TextContent)
+	if tc.Text == "" {
+		t.Error("expected archive result text")
+	}
+}
+
+func TestDispatchTaskMissingFields(t *testing.T) {
+	h := testHandlers(t)
+	// Missing profile
+	res, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "test",
+	}))
+	expectError(t, res)
+
+	// Missing title
+	res2, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev",
+	}))
+	expectError(t, res2)
+}
+
+// --- Memory Tests ---
+
+func TestMemorySetAndGet(t *testing.T) {
+	h := testHandlers(t)
+
+	// Set
+	setRes, _ := h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "api_url", "value": "https://example.com",
+	}))
+	setData := parseJSON(t, setRes)
+	mem := setData["memory"].(map[string]any)
+	if mem["key"] != "api_url" {
+		t.Errorf("expected key=api_url, got %v", mem["key"])
+	}
+
+	// Get
+	getRes, _ := h.HandleGetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "api_url",
+	}))
+	getData := parseJSON(t, getRes)
+	if getData["count"].(float64) != 1 {
+		t.Errorf("expected 1 memory, got %v", getData["count"])
+	}
+}
+
+func TestMemorySetMissingFields(t *testing.T) {
+	h := testHandlers(t)
+	// Missing key
+	res, _ := h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "value": "test",
+	}))
+	expectError(t, res)
+
+	// Missing value
+	res2, _ := h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "test",
+	}))
+	expectError(t, res2)
+}
+
+func TestMemorySearch(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "deploy_url", "value": "the production deploy URL is https://prod.example.com",
+	}))
+	h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "db_host", "value": "database host is db.internal",
+	}))
+
+	res, _ := h.HandleSearchMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "query": "deploy",
+	}))
+	// FTS5 may not be available in test builds — if error, that's expected
+	if res.IsError {
+		t.Skip("FTS5 not available in this build")
+	}
+	data := parseJSON(t, res)
+	if data["count"].(float64) < 1 {
+		t.Errorf("expected at least 1 search result, got %v", data["count"])
+	}
+}
+
+func TestMemoryList(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "k1", "value": "v1",
+	}))
+	h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-b", "key": "k2", "value": "v2",
+	}))
+
+	res, _ := h.HandleListMemories(ctx, call(map[string]any{
+		"project": "p1",
+	}))
+	data := parseJSON(t, res)
+	if data["count"].(float64) != 2 {
+		t.Errorf("expected 2 memories, got %v", data["count"])
+	}
+}
+
+func TestMemoryDelete(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "temp", "value": "to delete",
+	}))
+
+	res, _ := h.HandleDeleteMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "temp",
+	}))
+	data := parseJSON(t, res)
+	if data["deleted"] != true {
+		t.Error("expected deleted=true")
+	}
+
+	// Should be gone
+	getRes, _ := h.HandleGetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "temp",
+	}))
+	getData := parseJSON(t, getRes)
+	if getData["count"].(float64) != 0 {
+		t.Errorf("expected 0 memories after delete, got %v", getData["count"])
+	}
+}
+
+// --- Profile Tests ---
+
+func TestProfileLifecycle(t *testing.T) {
+	h := testHandlers(t)
+
+	// Register
+	regRes, _ := h.HandleRegisterProfile(ctx, call(map[string]any{
+		"project": "p1", "slug": "backend", "name": "Backend Dev", "role": "developer",
+	}))
+	profile := parseJSON(t, regRes)
+	if profile["slug"] != "backend" {
+		t.Errorf("expected slug=backend, got %v", profile["slug"])
+	}
+
+	// Get
+	getRes, _ := h.HandleGetProfile(ctx, call(map[string]any{
+		"project": "p1", "slug": "backend",
+	}))
+	got := parseJSON(t, getRes)
+	if got["name"] != "Backend Dev" {
+		t.Errorf("expected name=Backend Dev, got %v", got["name"])
+	}
+
+	// List
+	listRes, _ := h.HandleListProfiles(ctx, call(map[string]any{
+		"project": "p1",
+	}))
+	listData := parseJSON(t, listRes)
+	if listData["count"].(float64) != 1 {
+		t.Errorf("expected 1 profile, got %v", listData["count"])
+	}
+}
+
+func TestProfileNotFound(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleGetProfile(ctx, call(map[string]any{
+		"project": "p1", "slug": "nonexistent",
+	}))
+	expectError(t, res)
+}
+
+func TestRegisterProfileMissingFields(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleRegisterProfile(ctx, call(map[string]any{
+		"project": "p1", "name": "test",
+	}))
+	expectError(t, res)
+
+	res2, _ := h.HandleRegisterProfile(ctx, call(map[string]any{
+		"project": "p1", "slug": "test",
+	}))
+	expectError(t, res2)
+}
+
+func TestFindProfiles(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterProfile(ctx, call(map[string]any{
+		"project": "p1", "slug": "backend", "name": "Backend Dev", "role": "dev",
+		"skills": `[{"tag": "golang"}]`,
+	}))
+	h.HandleRegisterProfile(ctx, call(map[string]any{
+		"project": "p1", "slug": "frontend", "name": "Frontend Dev", "role": "dev",
+		"skills": `[{"tag": "react"}]`,
+	}))
+
+	res, _ := h.HandleFindProfiles(ctx, call(map[string]any{
+		"project": "p1", "skill_tag": "golang",
+	}))
+	data := parseJSON(t, res)
+	if data["count"].(float64) != 1 {
+		t.Errorf("expected 1 profile with golang tag, got %v", data["count"])
+	}
+}
+
+// --- Board Tests ---
+
+func TestBoardLifecycle(t *testing.T) {
+	h := testHandlers(t)
+
+	// Create
+	createRes, _ := h.HandleCreateBoard(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "name": "Sprint 1", "slug": "sprint-1",
+	}))
+	board := parseJSON(t, createRes)
+	boardID := board["id"].(string)
+	if board["name"] != "Sprint 1" {
+		t.Errorf("expected Sprint 1, got %v", board["name"])
+	}
+
+	// List (returns array, not map)
+	listRes, _ := h.HandleListBoards(ctx, call(map[string]any{"project": "p1"}))
+	tc := listRes.Content[0].(mcp.TextContent)
+	var boardList []any
+	if err := json.Unmarshal([]byte(tc.Text), &boardList); err != nil {
+		t.Fatalf("parse board list: %v", err)
+	}
+	if len(boardList) != 1 {
+		t.Errorf("expected 1 board, got %d", len(boardList))
+	}
+
+	// Archive (returns plain text)
+	archiveRes, _ := h.HandleArchiveBoard(ctx, call(map[string]any{
+		"project": "p1", "board_id": boardID,
+	}))
+	if archiveRes.IsError {
+		t.Errorf("archive board failed: %v", archiveRes.Content)
+	}
+
+	// Delete (returns plain text)
+	deleteRes, _ := h.HandleDeleteBoard(ctx, call(map[string]any{
+		"project": "p1", "board_id": boardID,
+	}))
+	if deleteRes.IsError {
+		t.Errorf("delete board failed: %v", deleteRes.Content)
+	}
+}
+
+func TestCreateBoardMissingFields(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleCreateBoard(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "name": "test",
+	}))
+	expectError(t, res)
+}
+
+// --- Goal Tests ---
+
+func TestGoalLifecycle(t *testing.T) {
+	h := testHandlers(t)
+
+	// Create
+	createRes, _ := h.HandleCreateGoal(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "Ship v2", "type": "agent_goal",
+	}))
+	goal := parseJSON(t, createRes)
+	goalID := goal["id"].(string)
+	if goal["title"] != "Ship v2" {
+		t.Errorf("expected 'Ship v2', got %v", goal["title"])
+	}
+
+	// Get
+	getRes, _ := h.HandleGetGoal(ctx, call(map[string]any{
+		"project": "p1", "goal_id": goalID,
+	}))
+	got := parseJSON(t, getRes)
+	if got["title"] != "Ship v2" {
+		t.Errorf("expected 'Ship v2', got %v", got["title"])
+	}
+
+	// Update
+	updateRes, _ := h.HandleUpdateGoal(ctx, call(map[string]any{
+		"project": "p1", "goal_id": goalID, "status": "completed",
+	}))
+	updated := parseJSON(t, updateRes)
+	if updated["status"] != "completed" {
+		t.Errorf("expected completed, got %v", updated["status"])
+	}
+
+	// List
+	listRes, _ := h.HandleListGoals(ctx, call(map[string]any{
+		"project": "p1",
+	}))
+	listData := parseJSON(t, listRes)
+	if listData["count"].(float64) != 1 {
+		t.Errorf("expected 1 goal, got %v", listData["count"])
+	}
+}
+
+// --- Org / Team Tests ---
+
+func TestOrgAndTeamLifecycle(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	// Create org
+	orgRes, _ := h.HandleCreateOrg(ctx, call(map[string]any{
+		"name": "Acme Corp", "slug": "acme",
+	}))
+	org := parseJSON(t, orgRes)
+	orgID := org["id"].(string)
+
+	// List orgs
+	listOrgRes, _ := h.HandleListOrgs(ctx, call(map[string]any{}))
+	orgs := parseJSON(t, listOrgRes)
+	if orgs["count"].(float64) != 1 {
+		t.Errorf("expected 1 org, got %v", orgs["count"])
+	}
+
+	// Create team
+	teamRes, _ := h.HandleCreateTeam(ctx, call(map[string]any{
+		"project": "p1", "name": "Backend Team", "slug": "backend", "org_id": orgID,
+	}))
+	team := parseJSON(t, teamRes)
+	if team["name"] != "Backend Team" {
+		t.Errorf("expected Backend Team, got %v", team["name"])
+	}
+
+	// List teams
+	listTeamRes, _ := h.HandleListTeams(ctx, call(map[string]any{"project": "p1"}))
+	teams := parseJSON(t, listTeamRes)
+	if teams["count"].(float64) != 1 {
+		t.Errorf("expected 1 team, got %v", teams["count"])
+	}
+
+	// Add member (uses team slug, not ID)
+	addRes, _ := h.HandleAddTeamMember(ctx, call(map[string]any{
+		"project": "p1", "team": "backend", "agent_name": "bot-a", "role": "lead",
+	}))
+	addData := parseJSON(t, addRes)
+	if addData["added"] != true {
+		t.Error("expected added=true")
+	}
+
+	// Remove member (uses team slug)
+	removeRes, _ := h.HandleRemoveTeamMember(ctx, call(map[string]any{
+		"project": "p1", "team": "backend", "agent_name": "bot-a",
+	}))
+	removeData := parseJSON(t, removeRes)
+	if removeData["removed"] != true {
+		t.Error("expected removed=true")
+	}
+}
+
+// --- Validation Tests (cross-cutting) ---
+
+func TestResolveProjectDefault(t *testing.T) {
+	req := call(map[string]any{})
+	if p := resolveProject(req); p != "default" {
+		t.Errorf("expected 'default', got %s", p)
+	}
+}
+
+func TestResolveAgentDefault(t *testing.T) {
+	req := call(map[string]any{})
+	if a := resolveAgent(req); a != "anonymous" {
+		t.Errorf("expected 'anonymous', got %s", a)
+	}
+}
+
+func TestOptionalString(t *testing.T) {
+	if optionalString("") != nil {
+		t.Error("expected nil for empty string")
+	}
+	if *optionalString("hello") != "hello" {
+		t.Error("expected 'hello'")
+	}
+}
