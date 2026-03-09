@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 - **`create_project` MCP tool** — one-command colony setup with 8-phase onboarding prompt (CTO + adaptive worker profiles, auto/interactive modes, sprint planning)
 - **`agent-relay update` CLI command** — self-update via GitHub Releases API (source build or prebuilt binary, launchd/systemd restart, `--force` flag)
 - **Smart Messaging** — priority-based routing, conversations (group chats), delivery tracking, SSE real-time stream
+- **Context budget pruning** — `get_inbox({ apply_budget: true })` scores messages by `0.7×priority + 0.2×tagRelevance + 0.1×freshness` and greedily selects the highest-value subset that fits the agent's byte budget. P0 messages always bypass the budget
 - **Message orbs** — animated projectiles between agents on canvas (team, direct, broadcast)
 - **Cancel button** on task notification cards — founder can reject agent tasks directly
 - **Markdown rendering** in task notification cards (via marked.js)
