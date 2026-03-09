@@ -210,14 +210,16 @@ func migrate(conn *sql.DB) error {
 	// --- Ensure all columns exist on every table (safe for old and new DBs) ---
 
 	ensureColumns(conn, "agents", map[string]string{
-		"project":        "TEXT NOT NULL DEFAULT 'default'",
-		"reports_to":     "TEXT",
-		"profile_slug":   "TEXT",
-		"status":         "TEXT NOT NULL DEFAULT 'active'",
-		"deactivated_at": "TEXT",
-		"is_executive":   "INTEGER NOT NULL DEFAULT 0",
-		"session_id":     "TEXT",
-		"org_id":         "TEXT",
+		"project":           "TEXT NOT NULL DEFAULT 'default'",
+		"reports_to":        "TEXT",
+		"profile_slug":      "TEXT",
+		"status":            "TEXT NOT NULL DEFAULT 'active'",
+		"deactivated_at":    "TEXT",
+		"is_executive":      "INTEGER NOT NULL DEFAULT 0",
+		"session_id":        "TEXT",
+		"org_id":            "TEXT",
+		"interest_tags":     "TEXT NOT NULL DEFAULT '[]'",
+		"max_context_bytes": "INTEGER NOT NULL DEFAULT 16384",
 	})
 
 	// Projects table (planet_type assigned per project)

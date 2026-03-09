@@ -106,8 +106,10 @@ func (h *Handlers) HandleRegisterAgent(ctx context.Context, req mcp.CallToolRequ
 	profileSlug := optionalString(req.GetString("profile_slug", ""))
 	isExecutive := req.GetBool("is_executive", false)
 	sessionID := optionalString(req.GetString("session_id", ""))
+	interestTags := req.GetString("interest_tags", "[]")
+	maxContextBytes := req.GetInt("max_context_bytes", 16384)
 
-	agent, isRespawn, err := h.db.RegisterAgent(project, name, role, description, reportsTo, profileSlug, isExecutive, sessionID)
+	agent, isRespawn, err := h.db.RegisterAgent(project, name, role, description, reportsTo, profileSlug, isExecutive, sessionID, interestTags, maxContextBytes)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to register agent: %v", err)), nil
 	}
@@ -248,6 +250,7 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 	unreadOnly := req.GetBool("unread_only", true)
 	limit := req.GetInt("limit", 10)
 	fullContent := req.GetBool("full_content", false)
+	budgetMode := req.GetBool("apply_budget", false)
 
 	_ = h.db.TouchAgent(project, agent)
 
@@ -260,6 +263,16 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 	}
 	if messages == nil {
 		messages = []models.Message{}
+	}
+
+	// Apply context budget pruning if requested
+	if budgetMode && len(messages) > 0 {
+		agentObj, _ := h.db.GetAgent(project, agent)
+		if agentObj != nil {
+			var tags []string
+			json.Unmarshal([]byte(agentObj.InterestTags), &tags)
+			messages = applyBudget(messages, tags, agentObj.MaxContextBytes)
+		}
 	}
 
 	formatted := make([]map[string]any, len(messages))

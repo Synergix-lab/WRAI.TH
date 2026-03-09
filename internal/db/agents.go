@@ -9,16 +9,22 @@ import (
 	"github.com/google/uuid"
 )
 
-const agentColumns = "id, name, role, description, registered_at, last_seen, project, reports_to, profile_slug, status, deactivated_at, is_executive, session_id"
+const agentColumns = "id, name, role, description, registered_at, last_seen, project, reports_to, profile_slug, status, deactivated_at, is_executive, session_id, interest_tags, max_context_bytes"
 
 func scanAgent(row interface{ Scan(...any) error }) (models.Agent, error) {
 	var a models.Agent
-	err := row.Scan(&a.ID, &a.Name, &a.Role, &a.Description, &a.RegisteredAt, &a.LastSeen, &a.Project, &a.ReportsTo, &a.ProfileSlug, &a.Status, &a.DeactivatedAt, &a.IsExecutive, &a.SessionID)
+	err := row.Scan(&a.ID, &a.Name, &a.Role, &a.Description, &a.RegisteredAt, &a.LastSeen, &a.Project, &a.ReportsTo, &a.ProfileSlug, &a.Status, &a.DeactivatedAt, &a.IsExecutive, &a.SessionID, &a.InterestTags, &a.MaxContextBytes)
 	return a, err
 }
 
-func (d *DB) RegisterAgent(project, name, role, description string, reportsTo, profileSlug *string, isExecutive bool, sessionID *string) (*models.Agent, bool, error) {
+func (d *DB) RegisterAgent(project, name, role, description string, reportsTo, profileSlug *string, isExecutive bool, sessionID *string, interestTags string, maxContextBytes int) (*models.Agent, bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
+	if interestTags == "" {
+		interestTags = "[]"
+	}
+	if maxContextBytes <= 0 {
+		maxContextBytes = 16384
+	}
 
 	// Ensure the project exists (auto-create with random planet on first use)
 	d.EnsureProject(project)
@@ -26,23 +32,26 @@ func (d *DB) RegisterAgent(project, name, role, description string, reportsTo, p
 	a, err := scanAgent(d.conn.QueryRow("SELECT "+agentColumns+" FROM agents WHERE name = ? AND project = ?", name, project))
 	if err == sql.ErrNoRows {
 		agent := &models.Agent{
-			ID:           uuid.New().String(),
-			Name:         name,
-			Role:         role,
-			Description:  description,
-			RegisteredAt: now,
-			LastSeen:     now,
-			Project:      project,
-			ReportsTo:    reportsTo,
-			ProfileSlug:  profileSlug,
-			Status:       "active",
-			IsExecutive:  isExecutive,
-			SessionID:    sessionID,
+			ID:              uuid.New().String(),
+			Name:            name,
+			Role:            role,
+			Description:     description,
+			RegisteredAt:    now,
+			LastSeen:        now,
+			Project:         project,
+			ReportsTo:       reportsTo,
+			ProfileSlug:     profileSlug,
+			Status:          "active",
+			IsExecutive:     isExecutive,
+			SessionID:       sessionID,
+			InterestTags:    interestTags,
+			MaxContextBytes: maxContextBytes,
 		}
 		_, err := d.conn.Exec(
-			"INSERT INTO agents ("+agentColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO agents ("+agentColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			agent.ID, agent.Name, agent.Role, agent.Description, agent.RegisteredAt, agent.LastSeen,
 			agent.Project, agent.ReportsTo, agent.ProfileSlug, agent.Status, agent.DeactivatedAt, agent.IsExecutive, agent.SessionID,
+			agent.InterestTags, agent.MaxContextBytes,
 		)
 		if err != nil {
 			return nil, false, fmt.Errorf("insert agent: %w", err)
@@ -55,8 +64,8 @@ func (d *DB) RegisterAgent(project, name, role, description string, reportsTo, p
 
 	// Existing agent — this is a respawn
 	_, err = d.conn.Exec(
-		"UPDATE agents SET role = ?, description = ?, last_seen = ?, reports_to = ?, profile_slug = ?, is_executive = ?, session_id = ?, status = 'active', deactivated_at = NULL WHERE name = ? AND project = ?",
-		role, description, now, reportsTo, profileSlug, isExecutive, sessionID, name, project,
+		"UPDATE agents SET role = ?, description = ?, last_seen = ?, reports_to = ?, profile_slug = ?, is_executive = ?, session_id = ?, interest_tags = ?, max_context_bytes = ?, status = 'active', deactivated_at = NULL WHERE name = ? AND project = ?",
+		role, description, now, reportsTo, profileSlug, isExecutive, sessionID, interestTags, maxContextBytes, name, project,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("update agent: %w", err)
@@ -68,6 +77,8 @@ func (d *DB) RegisterAgent(project, name, role, description string, reportsTo, p
 	a.ProfileSlug = profileSlug
 	a.IsExecutive = isExecutive
 	a.SessionID = sessionID
+	a.InterestTags = interestTags
+	a.MaxContextBytes = maxContextBytes
 	a.Status = "active"
 	a.DeactivatedAt = nil
 	return &a, true, nil

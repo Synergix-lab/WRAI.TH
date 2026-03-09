@@ -12,6 +12,8 @@ type Agent struct {
 	ProfileSlug   *string `json:"profile_slug,omitempty"`
 	Status        string  `json:"status"`
 	DeactivatedAt *string `json:"deactivated_at,omitempty"`
-	IsExecutive   bool    `json:"is_executive"`
-	SessionID     *string `json:"session_id,omitempty"`
+	IsExecutive     bool    `json:"is_executive"`
+	SessionID       *string `json:"session_id,omitempty"`
+	InterestTags    string  `json:"interest_tags"`
+	MaxContextBytes int     `json:"max_context_bytes"`
 }

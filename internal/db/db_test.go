@@ -42,7 +42,7 @@ func TestConcurrentReadsAndWrite(t *testing.T) {
 	d := testDB(t)
 
 	// Seed an agent
-	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil, "[]", 0)
 
 	var wg sync.WaitGroup
 	var errors atomic.Int32
@@ -89,7 +89,7 @@ func TestConcurrentReadsAndWrite(t *testing.T) {
 func TestConcurrentWriters(t *testing.T) {
 	d := testDB(t)
 
-	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil, "[]", 0)
 
 	var wg sync.WaitGroup
 	var errors atomic.Int32
@@ -122,7 +122,7 @@ func TestOptimizeNoCorruption(t *testing.T) {
 	d := testDB(t)
 
 	// Insert some data
-	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil, "[]", 0)
 	for i := 0; i < 10; i++ {
 		d.InsertMessage("default", "bot-a", "bot-b", "notification", "test", fmt.Sprintf("msg-%d", i), "{}", "P2", 3600, nil, nil)
 	}
@@ -173,7 +173,7 @@ func TestReadAfterWrite(t *testing.T) {
 	d := testDB(t)
 
 	// Write via writer
-	d.RegisterAgent("default", "bot-a", "tester", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "tester", "", nil, nil, false, nil, "[]", 0)
 
 	// Read via reader should see the write (WAL visibility)
 	agents, err := d.ListAgents("default")
@@ -190,7 +190,7 @@ func TestReadAfterWrite(t *testing.T) {
 
 func TestReadsNeverBlockedByWrite(t *testing.T) {
 	d := testDB(t)
-	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil, "[]", 0)
 
 	// Start a long write transaction on the writer
 	tx, err := d.conn.Begin()
@@ -226,7 +226,7 @@ func TestReadsNeverBlockedByWrite(t *testing.T) {
 
 func TestWritesDontUseManyConns(t *testing.T) {
 	d := testDB(t)
-	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil, "[]", 0)
 
 	// Writer pool has MaxOpenConns=1. Concurrent writes should serialize, not error.
 	var wg sync.WaitGroup
@@ -257,7 +257,7 @@ func TestMixedReadWriteFunction(t *testing.T) {
 	d := testDB(t)
 
 	// RegisterAgent reads (check existing) then writes (insert) — tests mixed path
-	agent1, isRespawn1, err := d.RegisterAgent("default", "bot-a", "tester", "", nil, nil, false, nil)
+	agent1, isRespawn1, err := d.RegisterAgent("default", "bot-a", "tester", "", nil, nil, false, nil, "[]", 0)
 	if err != nil {
 		t.Fatalf("register agent: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestMixedReadWriteFunction(t *testing.T) {
 	}
 
 	// Re-register same agent — should read existing via writer, then update
-	agent2, isRespawn2, err := d.RegisterAgent("default", "bot-a", "updated", "", nil, nil, false, nil)
+	agent2, isRespawn2, err := d.RegisterAgent("default", "bot-a", "updated", "", nil, nil, false, nil, "[]", 0)
 	if err != nil {
 		t.Fatalf("re-register agent: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestCloseCheckpoint(t *testing.T) {
 	d := &DB{conn: writer, reader: reader, path: dbPath}
 
 	// Insert data to create WAL entries
-	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil, "[]", 0)
 	for i := 0; i < 50; i++ {
 		d.InsertMessage("default", "bot-a", "bot-b", "notification", "test", fmt.Sprintf("msg-%d", i), "{}", "P2", 3600, nil, nil)
 	}
@@ -336,7 +336,7 @@ func TestCloseCheckpoint(t *testing.T) {
 func TestHeavyLoad(t *testing.T) {
 	d := testDB(t)
 
-	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil)
+	d.RegisterAgent("default", "bot-a", "test", "", nil, nil, false, nil, "[]", 0)
 
 	var wg sync.WaitGroup
 	var writeErrors, readErrors atomic.Int32

@@ -30,6 +30,8 @@ func registerAgentTool() mcp.Tool {
 		mcp.WithBoolean("is_executive", mcp.Description("Mark this agent as an executive (shows crown on canvas)")),
 		mcp.WithString("profile_slug", mcp.Description("Profile archetype this agent runs (links to a registered profile)")),
 		mcp.WithString("session_id", mcp.Description("Claude Code session ID ($CLAUDE_SESSION_ID) — used for activity tracking via hooks")),
+		mcp.WithString("interest_tags", mcp.Description("JSON array of interest tags for context budget filtering (e.g. '[\"database\",\"auth\"]')")),
+		mcp.WithNumber("max_context_bytes", mcp.Description("Max bytes for budget-pruned inbox (default: 16384)")),
 	)
 }
 
@@ -66,6 +68,7 @@ func getInboxTool() mcp.Tool {
 		mcp.WithBoolean("unread_only", mcp.Description("Only return unread messages (default: true)")),
 		mcp.WithNumber("limit", mcp.Description("Max number of messages to return (default: 10).")),
 		mcp.WithBoolean("full_content", mcp.Description("Return full message content instead of truncating to 300 chars (default: false)")),
+		mcp.WithBoolean("apply_budget", mcp.Description("Apply context budget pruning: filters messages by priority, tag relevance, and freshness to fit within agent's max_context_bytes (default: false)")),
 	)
 }
 
