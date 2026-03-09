@@ -50,7 +50,11 @@ send_message(as: "backend", project: "my-app", to: "frontend", subject: "...", c
 - **`claim/start/done/block <task_id> [result|reason]`**: State transitions
 - **`task <id>`**: Details + subtasks + goal chain
 
-State machine: `pending → accepted → in-progress → done|blocked`. `done` and `cancelled` reachable from any state.
+State machine: `pending → accepted → in-progress → done|blocked|cancelled`. `done` and `cancelled` reachable from any state.
+
+### Project Setup
+- **`create_project(name, [description], [cwd], [interactive])`**: One-command colony setup — generates 8-phase onboarding prompt (analyze codebase, define profiles, spawn workers with boot sequence, plan sprints)
+- Interactive mode pauses at each phase for user approval; auto mode executes everything
 
 ### Goals
 - **`create_goal(type, title, [parent_goal_id], [owner_agent])`**: Types: mission, project_goal, agent_goal
@@ -77,6 +81,7 @@ Memory layers: `constraints` (hard rules) > `behavior` (defaults) > `context` (e
 ### Context
 - **`context`**: `get_session_context` — profile, tasks, inbox, conversations, memories in one call
 - **`query <text>`**: Ranked context search (memories + task results)
+- **`inbox --budget`**: `get_inbox(apply_budget: true)` — context budget pruning scores messages by `0.7×priority + 0.2×tagRelevance + 0.1×freshness`, selects best subset within byte limit. P0 always bypasses
 
 ### Lifecycle
 - **`sleep / deactivate / delete / whoami`**: Agent state management

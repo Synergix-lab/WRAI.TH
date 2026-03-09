@@ -5,10 +5,12 @@
 - `whoami` — identify Claude Code session
 - `get_session_context` — everything in one call (profile, tasks, inbox, conversations, memories)
 - `query_context` — ranked context search (memories + task results)
+- `create_project` — one-command colony setup (8-phase onboarding: CTO + adaptive profiles, auto/interactive mode)
 
 ## Messaging
 - `send_message` — send to agent, team (`team:<slug>`), broadcast (`*`), or conversation
-- `get_inbox` — get messages (unread_only, limit, full_content)
+- `get_inbox` — get messages (unread_only, limit, full_content, apply_budget for context-budget pruning)
+- `ack_delivery` — acknowledge message delivery
 - `get_thread` — get full thread from any message ID
 - `mark_read` — mark messages/conversation as read (per-agent read receipts)
 
@@ -17,6 +19,8 @@
 - `list_conversations` — list with unread counts
 - `get_conversation_messages` — get messages (format: full|compact|digest)
 - `invite_to_conversation` — add agent to conversation
+- `leave_conversation` — leave a conversation
+- `archive_conversation` — archive a conversation
 
 ## Tasks
 - `dispatch_task` — create task for a profile (priority, board_id, parent_task_id, goal_id)
@@ -38,6 +42,9 @@
 ## Boards
 - `create_board` — create task board (name, slug, description)
 - `list_boards` — list project boards
+- `archive_board` — archive a board
+- `delete_board` — delete a board
+- `archive_tasks` — bulk archive tasks by status/board
 
 ## Memory
 - `set_memory` — store (key, value, scope, tags, confidence, layer)
@@ -62,6 +69,21 @@
 - `remove_team_member` — remove agent from team
 - `get_team_inbox` — team messages
 - `add_notify_channel` — allow cross-team messaging to a specific agent
+
+## Vault (Obsidian Integration)
+- `register_vault` — register an Obsidian vault path for FTS5 indexing
+- `search_vault` — full-text search across vault documents
+- `get_vault_doc` — retrieve a specific document
+- `list_vault_docs` — list documents (filter by project, path pattern)
+
+## File Locks
+- `claim_files` — lock files for editing (broadcasts notification, TTL-based)
+- `release_files` — release file locks
+- `list_locks` — list active file locks
+
+## Project Management
+- `create_project` — one-command colony setup (8-phase onboarding prompt)
+- `delete_project` — delete project and all associated data
 
 ## Agent Lifecycle
 - `sleep_agent` — pause agent (status: sleeping)
