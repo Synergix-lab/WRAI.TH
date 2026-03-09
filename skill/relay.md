@@ -125,6 +125,8 @@ Link session to agent: pass `session_id` from `whoami` in `register_agent`.
 
 ## Data Conventions
 
+**Agent names are case-insensitive.** The relay lowercases all agent names on ingestion. `Bot-A`, `bot-a`, and `BOT-A` all resolve to `bot-a`.
+
 **All JSON keys MUST use `snake_case`** — never camelCase. This applies to:
 - Message `content` and `metadata` fields
 - Task `result` values
