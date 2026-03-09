@@ -15,4 +15,6 @@ type Message struct {
 	Project        string  `json:"project"`
 	TaskID         *string `json:"task_id,omitempty"`
 	Priority       string  `json:"priority"`
+	TTLSeconds     int     `json:"ttl_seconds"`
+	ExpiredAt      *string `json:"expired_at,omitempty"`
 }

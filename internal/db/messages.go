@@ -9,10 +9,13 @@ import (
 	"github.com/google/uuid"
 )
 
-func (d *DB) InsertMessage(project, from, to, msgType, subject, content, metadata, priority string, replyTo, conversationID *string) (*models.Message, error) {
+func (d *DB) InsertMessage(project, from, to, msgType, subject, content, metadata, priority string, ttlSeconds int, replyTo, conversationID *string) (*models.Message, error) {
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
 	if priority == "" {
 		priority = "P2"
+	}
+	if ttlSeconds < 0 {
+		ttlSeconds = 3600
 	}
 
 	msg := &models.Message{
@@ -28,11 +31,12 @@ func (d *DB) InsertMessage(project, from, to, msgType, subject, content, metadat
 		ConversationID: conversationID,
 		Project:        project,
 		Priority:       priority,
+		TTLSeconds:     ttlSeconds,
 	}
 
 	_, err := d.conn.Exec(
-		"INSERT INTO messages (id, from_agent, to_agent, reply_to, type, subject, content, metadata, created_at, conversation_id, project, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		msg.ID, msg.From, msg.To, msg.ReplyTo, msg.Type, msg.Subject, msg.Content, msg.Metadata, msg.CreatedAt, msg.ConversationID, msg.Project, msg.Priority,
+		"INSERT INTO messages (id, from_agent, to_agent, reply_to, type, subject, content, metadata, created_at, conversation_id, project, priority, ttl_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		msg.ID, msg.From, msg.To, msg.ReplyTo, msg.Type, msg.Subject, msg.Content, msg.Metadata, msg.CreatedAt, msg.ConversationID, msg.Project, msg.Priority, msg.TTLSeconds,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert message: %w", err)
@@ -46,7 +50,7 @@ func (d *DB) GetInbox(project, agentName string, unreadOnly bool, limit int) ([]
 	}
 
 	query := `
-		SELECT m.id, m.from_agent, m.to_agent, m.reply_to, m.type, m.subject, m.content, m.metadata, m.created_at, m.read_at, m.conversation_id, m.project, m.task_id, m.priority
+		SELECT m.id, m.from_agent, m.to_agent, m.reply_to, m.type, m.subject, m.content, m.metadata, m.created_at, m.read_at, m.conversation_id, m.project, m.task_id, m.priority, m.ttl_seconds, m.expired_at
 		FROM messages m
 		WHERE m.project = ?
 			AND (
@@ -58,6 +62,7 @@ func (d *DB) GetInbox(project, agentName string, unreadOnly bool, limit int) ([]
 					WHERE agent_name = ? AND left_at IS NULL
 				) AND m.from_agent != ?)
 			)
+			AND m.expired_at IS NULL
 	`
 	args := []any{project, agentName, agentName, agentName, agentName}
 
@@ -90,10 +95,10 @@ func (d *DB) GetThread(messageID string) ([]models.Message, error) {
 
 	query := `
 		WITH RECURSIVE thread AS (
-			SELECT id, from_agent, to_agent, reply_to, type, subject, content, metadata, created_at, read_at, conversation_id, project, task_id, priority
+			SELECT id, from_agent, to_agent, reply_to, type, subject, content, metadata, created_at, read_at, conversation_id, project, task_id, priority, ttl_seconds, expired_at
 			FROM messages WHERE id = ?
 			UNION ALL
-			SELECT m.id, m.from_agent, m.to_agent, m.reply_to, m.type, m.subject, m.content, m.metadata, m.created_at, m.read_at, m.conversation_id, m.project, m.task_id, m.priority
+			SELECT m.id, m.from_agent, m.to_agent, m.reply_to, m.type, m.subject, m.content, m.metadata, m.created_at, m.read_at, m.conversation_id, m.project, m.task_id, m.priority, m.ttl_seconds, m.expired_at
 			FROM messages m
 			JOIN thread t ON m.reply_to = t.id
 		)
@@ -156,7 +161,7 @@ func (d *DB) MarkRead(messageIDs []string, agentName, project string) (int, erro
 
 func (d *DB) GetMessage(id string) (*models.Message, error) {
 	msgs, err := d.queryMessages(
-		"SELECT id, from_agent, to_agent, reply_to, type, subject, content, metadata, created_at, read_at, conversation_id, project, task_id, priority FROM messages WHERE id = ?",
+		"SELECT id, from_agent, to_agent, reply_to, type, subject, content, metadata, created_at, read_at, conversation_id, project, task_id, priority, ttl_seconds, expired_at FROM messages WHERE id = ?",
 		id,
 	)
 	if err != nil {
@@ -203,10 +208,28 @@ func (d *DB) queryMessages(query string, args ...any) ([]models.Message, error) 
 	var messages []models.Message
 	for rows.Next() {
 		var m models.Message
-		if err := rows.Scan(&m.ID, &m.From, &m.To, &m.ReplyTo, &m.Type, &m.Subject, &m.Content, &m.Metadata, &m.CreatedAt, &m.ReadAt, &m.ConversationID, &m.Project, &m.TaskID, &m.Priority); err != nil {
+		if err := rows.Scan(&m.ID, &m.From, &m.To, &m.ReplyTo, &m.Type, &m.Subject, &m.Content, &m.Metadata, &m.CreatedAt, &m.ReadAt, &m.ConversationID, &m.Project, &m.TaskID, &m.Priority, &m.TTLSeconds, &m.ExpiredAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		messages = append(messages, m)
 	}
 	return messages, rows.Err()
+}
+
+// ExpireMessages marks messages whose TTL has elapsed as expired.
+// ttl_seconds=0 means never expires.
+func (d *DB) ExpireMessages() (int, error) {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
+	result, err := d.conn.Exec(
+		`UPDATE messages SET expired_at = ?
+		 WHERE expired_at IS NULL
+		   AND ttl_seconds > 0
+		   AND datetime(created_at, '+' || ttl_seconds || ' seconds') < datetime(?)`,
+		now, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("expire messages: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
 }

@@ -148,6 +148,7 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 	replyTo := optionalString(req.GetString("reply_to", ""))
 	conversationID := optionalString(req.GetString("conversation_id", ""))
 	priority := mapPriority(req.GetString("priority", "P2"))
+	ttlSeconds := req.GetInt("ttl_seconds", 3600)
 
 	// Support "to": "conversation:<id>" shorthand
 	if conversationID == nil && strings.HasPrefix(to, "conversation:") {
@@ -194,7 +195,7 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 			return mcp.NewToolResultError(fmt.Sprintf("team '%s' not found", teamSlug)), nil
 		}
 
-		msg, err := h.db.InsertMessage(project, from, to, msgType, subject, content, metadata, priority, replyTo, conversationID)
+		msg, err := h.db.InsertMessage(project, from, to, msgType, subject, content, metadata, priority, ttlSeconds, replyTo, conversationID)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to send message: %v", err)), nil
 		}
@@ -224,7 +225,7 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		}
 	}
 
-	msg, err := h.db.InsertMessage(project, from, to, msgType, subject, content, metadata, priority, replyTo, conversationID)
+	msg, err := h.db.InsertMessage(project, from, to, msgType, subject, content, metadata, priority, ttlSeconds, replyTo, conversationID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to send message: %v", err)), nil
 	}
@@ -249,6 +250,9 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 	fullContent := req.GetBool("full_content", false)
 
 	_ = h.db.TouchAgent(project, agent)
+
+	// Expire stale messages before querying
+	h.db.ExpireMessages()
 
 	messages, err := h.db.GetInbox(project, agent, unreadOnly, limit)
 	if err != nil {

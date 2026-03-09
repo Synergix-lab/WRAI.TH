@@ -53,6 +53,7 @@ func sendMessageTool() mcp.Tool {
 			mcp.Description("Message priority. P0=interrupt (critical), P1=steering (important), P2=advisory (default), P3=info (low). MACP aliases accepted."),
 			mcp.Enum("P0", "P1", "P2", "P3", "interrupt", "steering", "advisory", "info"),
 		),
+		mcp.WithNumber("ttl_seconds", mcp.Description("Time-to-live in seconds (default: 3600 = 1h, 0 = never expires). Expired messages are excluded from inbox.")),
 	)
 }
 

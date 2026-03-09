@@ -38,6 +38,11 @@ func StartCleanup(database *db.DB, done <-chan struct{}) {
 				} else if n > 0 {
 					log.Printf("marked %d stale agent(s) inactive", n)
 				}
+				if expired, err := database.ExpireMessages(); err != nil {
+					log.Printf("expire messages error: %v", err)
+				} else if expired > 0 {
+					log.Printf("expired %d message(s)", expired)
+				}
 				database.Optimize()
 			}
 		}

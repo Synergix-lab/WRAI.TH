@@ -241,6 +241,8 @@ func migrate(conn *sql.DB) error {
 		"project":         "TEXT NOT NULL DEFAULT 'default'",
 		"task_id":         "TEXT",
 		"priority":        "TEXT NOT NULL DEFAULT 'P2'",
+		"ttl_seconds":     "INTEGER NOT NULL DEFAULT 3600",
+		"expired_at":      "TEXT",
 	})
 
 	ensureColumns(conn, "conversations", map[string]string{
