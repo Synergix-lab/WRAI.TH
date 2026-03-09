@@ -900,6 +900,246 @@ func TestOrgAndTeamLifecycle(t *testing.T) {
 	}
 }
 
+// --- Memory Conflict Tests ---
+
+func TestMemoryConflictAndResolve(t *testing.T) {
+	h := testHandlers(t)
+
+	// Agent A sets a memory
+	h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "db_host", "value": "localhost",
+	}))
+
+	// Agent B sets the same key with different value → conflict
+	setRes, _ := h.HandleSetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-b", "key": "db_host", "value": "prod-db.internal",
+	}))
+	setData := parseJSON(t, setRes)
+	if setData["conflict"] != true {
+		t.Error("expected conflict=true")
+	}
+
+	// Get should show multiple values
+	getRes, _ := h.HandleGetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "db_host",
+	}))
+	getData := parseJSON(t, getRes)
+	if getData["count"].(float64) < 2 {
+		t.Errorf("expected at least 2 conflicting memories, got %v", getData["count"])
+	}
+
+	// Resolve conflict
+	resolveRes, _ := h.HandleResolveConflict(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "db_host", "chosen_value": "prod-db.internal",
+	}))
+	resolveData := parseJSON(t, resolveRes)
+	if resolveData["resolved"] != true {
+		t.Error("expected resolved=true")
+	}
+
+	// After resolve, should be 1 value
+	getRes2, _ := h.HandleGetMemory(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "db_host",
+	}))
+	getData2 := parseJSON(t, getRes2)
+	if getData2["count"].(float64) != 1 {
+		t.Errorf("expected 1 memory after resolve, got %v", getData2["count"])
+	}
+}
+
+func TestResolveConflictMissingFields(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleResolveConflict(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "chosen_value": "x",
+	}))
+	expectError(t, res)
+
+	res2, _ := h.HandleResolveConflict(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "key": "k",
+	}))
+	expectError(t, res2)
+}
+
+// --- Goal Cascade Tests ---
+
+func TestGoalCascade(t *testing.T) {
+	h := testHandlers(t)
+
+	// Create parent goal
+	parentRes, _ := h.HandleCreateGoal(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "Mission", "type": "mission",
+	}))
+	parent := parseJSON(t, parentRes)
+	parentID := parent["id"].(string)
+
+	// Create child goal
+	h.HandleCreateGoal(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "Sub-goal", "type": "project_goal",
+		"parent_goal_id": parentID,
+	}))
+
+	// Get cascade
+	cascadeRes, _ := h.HandleGetGoalCascade(ctx, call(map[string]any{
+		"project": "p1",
+	}))
+	if cascadeRes.IsError {
+		t.Fatalf("cascade error: %v", cascadeRes.Content)
+	}
+	// cascade returns a structure — just verify it doesn't error
+}
+
+// --- Team Inbox Tests ---
+
+func TestTeamInbox(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	h.HandleCreateTeam(ctx, call(map[string]any{
+		"project": "p1", "name": "Dev Team", "slug": "dev",
+	}))
+	h.HandleAddTeamMember(ctx, call(map[string]any{
+		"project": "p1", "team": "dev", "agent_name": "bot-a",
+	}))
+
+	// Send message to team
+	h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "to": "team:dev", "content": "team message",
+	}))
+
+	// Get team inbox
+	inboxRes, _ := h.HandleGetTeamInbox(ctx, call(map[string]any{
+		"project": "p1", "team": "dev",
+	}))
+	data := parseJSON(t, inboxRes)
+	if data["count"].(float64) != 1 {
+		t.Errorf("expected 1 team message, got %v", data["count"])
+	}
+}
+
+func TestTeamInboxMissingTeam(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleGetTeamInbox(ctx, call(map[string]any{"project": "p1"}))
+	expectError(t, res)
+}
+
+func TestTeamInboxNotFound(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleGetTeamInbox(ctx, call(map[string]any{
+		"project": "p1", "team": "nonexistent",
+	}))
+	expectError(t, res)
+}
+
+// --- Notify Channel Tests ---
+
+func TestAddNotifyChannel(t *testing.T) {
+	h := testHandlers(t)
+
+	res, _ := h.HandleAddNotifyChannel(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "target": "bot-b",
+	}))
+	data := parseJSON(t, res)
+	if data["added"] != true {
+		t.Error("expected added=true")
+	}
+}
+
+func TestAddNotifyChannelMissingTarget(t *testing.T) {
+	h := testHandlers(t)
+	res, _ := h.HandleAddNotifyChannel(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a",
+	}))
+	expectError(t, res)
+}
+
+// --- Message Broadcast Tests ---
+
+func TestSendBroadcastMessage(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+
+	res, _ := h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "to": "*", "content": "broadcast!",
+	}))
+	msg := parseJSON(t, res)
+	if msg["to"] != "*" {
+		t.Errorf("expected to=*, got %v", msg["to"])
+	}
+
+	// bot-b should see it in inbox
+	inboxRes, _ := h.HandleGetInbox(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-b", "unread_only": true,
+	}))
+	inbox := parseJSON(t, inboxRes)
+	if inbox["count"].(float64) != 1 {
+		t.Errorf("expected 1 broadcast message, got %v", inbox["count"])
+	}
+}
+
+func TestSendConversationShorthand(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-b", "role": "qa"}))
+
+	// Create conversation
+	createRes, _ := h.HandleCreateConversation(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "title": "test", "members": []any{"bot-a", "bot-b"},
+	}))
+	conv := parseJSON(t, createRes)["conversation"].(map[string]any)
+	convID := conv["id"].(string)
+
+	// Send using "to": "conversation:<id>" shorthand
+	sendRes, _ := h.HandleSendMessage(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "to": "conversation:" + convID, "content": "shorthand!",
+	}))
+	if sendRes.IsError {
+		t.Fatalf("send via shorthand failed: %v", sendRes.Content)
+	}
+}
+
+// --- Task with subtasks ---
+
+func TestTaskSubtaskCompletion(t *testing.T) {
+	h := testHandlers(t)
+	h.HandleRegisterAgent(ctx, call(map[string]any{"project": "p1", "name": "bot-a", "role": "dev"}))
+
+	// Dispatch parent
+	parentRes, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev", "title": "Parent task",
+	}))
+	parent := parseJSON(t, parentRes)
+	parentID := parent["id"].(string)
+
+	// Dispatch subtask
+	subRes, _ := h.HandleDispatchTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "profile": "dev", "title": "Subtask 1",
+		"parent_task_id": parentID,
+	}))
+	sub := parseJSON(t, subRes)
+	subID := sub["id"].(string)
+
+	// Complete subtask flow
+	h.HandleClaimTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "task_id": subID}))
+	h.HandleStartTask(ctx, call(map[string]any{"project": "p1", "as": "bot-a", "task_id": subID}))
+	completeRes, _ := h.HandleCompleteTask(ctx, call(map[string]any{
+		"project": "p1", "as": "bot-a", "task_id": subID, "result": "done",
+	}))
+	completed := parseJSON(t, completeRes)
+	if completed["status"] != "done" {
+		t.Errorf("expected done, got %v", completed["status"])
+	}
+
+	// Get parent with subtasks
+	getRes, _ := h.HandleGetTask(ctx, call(map[string]any{
+		"project": "p1", "task_id": parentID, "include_subtasks": true,
+	}))
+	parentData := parseJSON(t, getRes)
+	if parentData["title"] != "Parent task" {
+		t.Errorf("expected 'Parent task', got %v", parentData["title"])
+	}
+}
+
 // --- Validation Tests (cross-cutting) ---
 
 func TestResolveProjectDefault(t *testing.T) {

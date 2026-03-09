@@ -567,6 +567,201 @@ func TestAPIGetTeams(t *testing.T) {
 	}
 }
 
+// --- More Team/Org API Tests ---
+
+func TestAPIGetOrgs(t *testing.T) {
+	r := testRelay(t)
+	r.DB.CreateOrg("Acme", "acme", "")
+
+	w := doAPI(r, "GET", "/orgs", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	orgs := decodeJSONArray(t, w)
+	if len(orgs) != 1 {
+		t.Errorf("expected 1 org, got %d", len(orgs))
+	}
+}
+
+func TestAPIGetAllTeams(t *testing.T) {
+	r := testRelay(t)
+	r.DB.CreateTeam("Backend", "backend", "p1", "", "regular", nil, nil)
+	r.DB.CreateTeam("Frontend", "frontend", "p2", "", "regular", nil, nil)
+
+	w := doAPI(r, "GET", "/teams/all", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	teams := decodeJSONArray(t, w)
+	if len(teams) != 2 {
+		t.Errorf("expected 2 teams across projects, got %d", len(teams))
+	}
+}
+
+func TestAPIGetTeamMembers(t *testing.T) {
+	r := testRelay(t)
+	team, _ := r.DB.CreateTeam("Backend", "backend", "p1", "", "regular", nil, nil)
+	r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil)
+	r.DB.AddTeamMember(team.ID, "bot-a", "p1", "lead")
+
+	w := doAPI(r, "GET", "/teams/backend/members?project=p1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- More Conversation API Tests ---
+
+func TestAPIGetAllConversations(t *testing.T) {
+	r := testRelay(t)
+	r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil)
+	r.DB.RegisterAgent("p2", "bot-b", "qa", "", nil, nil, false, nil)
+	r.DB.CreateConversation("p1", "conv1", "bot-a", []string{"bot-a"})
+	r.DB.CreateConversation("p2", "conv2", "bot-b", []string{"bot-b"})
+
+	w := doAPI(r, "GET", "/conversations/all", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	convs := decodeJSONArray(t, w)
+	if len(convs) != 2 {
+		t.Errorf("expected 2 conversations across projects, got %d", len(convs))
+	}
+}
+
+// --- More Message API Tests ---
+
+func TestAPIGetLatestMessages(t *testing.T) {
+	r := testRelay(t)
+	r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil)
+	r.DB.InsertMessage("p1", "bot-a", "bot-b", "notification", "test", "recent msg", "{}", nil, nil)
+
+	w := doAPI(r, "GET", "/messages/latest?project=p1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	msgs := decodeJSONArray(t, w)
+	if len(msgs) != 1 {
+		t.Errorf("expected 1 recent message, got %d", len(msgs))
+	}
+}
+
+func TestAPIGetLatestMessagesAllProjects(t *testing.T) {
+	r := testRelay(t)
+	r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil)
+	r.DB.InsertMessage("p1", "bot-a", "bot-b", "notification", "test", "msg1", "{}", nil, nil)
+
+	w := doAPI(r, "GET", "/messages/latest-all", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+// --- More Task API Tests ---
+
+func TestAPIGetLatestTasks(t *testing.T) {
+	r := testRelay(t)
+	r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil)
+	r.DB.DispatchTask("p1", "dev", "bot-a", "recent task", "", "P2", nil, nil, nil)
+
+	w := doAPI(r, "GET", "/tasks/latest?project=p1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestAPIUpdateTask(t *testing.T) {
+	r := testRelay(t)
+	r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil)
+	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "old title", "", "P2", nil, nil, nil)
+
+	w := doAPI(r, "PUT", "/tasks/"+task.ID, `{"project":"p1","title":"new title"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	updated := decodeJSON(t, w)
+	if updated["title"] != "new title" {
+		t.Errorf("expected 'new title', got %v", updated["title"])
+	}
+}
+
+func TestAPIDeleteTask(t *testing.T) {
+	r := testRelay(t)
+	r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil)
+	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "to delete", "", "P2", nil, nil, nil)
+
+	w := doAPI(r, "DELETE", "/tasks/"+task.ID+"?project=p1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	data := decodeJSON(t, w)
+	if data["deleted"] != true {
+		t.Error("expected deleted=true")
+	}
+}
+
+// --- More Goal API Tests ---
+
+func TestAPIGetAllGoals(t *testing.T) {
+	r := testRelay(t)
+	r.DB.CreateGoal("p1", "agent_goal", "Goal 1", "", "user", nil, nil)
+	r.DB.CreateGoal("p2", "agent_goal", "Goal 2", "", "user", nil, nil)
+
+	w := doAPI(r, "GET", "/goals/all", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	goals := decodeJSONArray(t, w)
+	if len(goals) != 2 {
+		t.Errorf("expected 2 goals, got %d", len(goals))
+	}
+}
+
+func TestAPIGetGoalCascade(t *testing.T) {
+	r := testRelay(t)
+	parent, _ := r.DB.CreateGoal("p1", "mission", "Mission", "", "user", nil, nil)
+	r.DB.CreateGoal("p1", "project_goal", "Sub-goal", "", "user", nil, &parent.ID)
+
+	w := doAPI(r, "GET", "/goals/cascade?project=p1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+// --- More Board API Tests ---
+
+func TestAPIGetAllBoards(t *testing.T) {
+	r := testRelay(t)
+	r.DB.CreateBoard("p1", "Sprint 1", "sprint-1", "", "user")
+	r.DB.CreateBoard("p2", "Sprint 2", "sprint-2", "", "user")
+
+	w := doAPI(r, "GET", "/boards/all", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	boards := decodeJSONArray(t, w)
+	if len(boards) != 2 {
+		t.Errorf("expected 2 boards, got %d", len(boards))
+	}
+}
+
+// --- Memory API resolve conflict ---
+
+func TestAPIResolveMemoryConflict(t *testing.T) {
+	r := testRelay(t)
+	r.DB.SetMemory("p1", "bot-a", "key1", "value-a", "[]", "project", "stated", "behavior")
+	r.DB.SetMemory("p1", "bot-b", "key1", "value-b", "[]", "project", "stated", "behavior")
+
+	w := doAPI(r, "POST", "/memories/key1/resolve", `{"project":"p1","chosen_value":"value-b"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	data := decodeJSON(t, w)
+	if data["resolved"] != true {
+		t.Error("expected resolved=true")
+	}
+}
+
 // --- 404 Test ---
 
 func TestAPINotFound(t *testing.T) {
