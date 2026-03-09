@@ -154,7 +154,7 @@ function layoutAgents() {
 
     // If no hierarchy, simple horizontal layout centered
     if (roots.length === agentCount || agentCount <= 2) {
-      const AGENT_SPACING = Math.min(120, engine.width / (agentCount + 1));
+      const AGENT_SPACING = Math.min(180, engine.width / (agentCount + 1));
       const startX = cx - (agentCount - 1) * AGENT_SPACING / 2;
       for (let i = 0; i < keys.length; i++) {
         const av = agentViews.get(keys[i]);
@@ -191,8 +191,8 @@ function layoutAgents() {
         maxTreeDepth = Math.max(maxTreeDepth, (subtreeDepth.get(r) || 0) + 1);
       }
 
-      const V_SPACING = Math.min(100, (engine.height * 0.7) / Math.max(maxTreeDepth, 1));
-      const H_SPACING = Math.min(120, (engine.width * 0.85) / Math.max(totalRootWidth, 1));
+      const V_SPACING = Math.min(140, (engine.height * 0.7) / Math.max(maxTreeDepth, 1));
+      const H_SPACING = Math.min(180, (engine.width * 0.85) / Math.max(totalRootWidth, 1));
 
       function placeColonySubtree(key, left, top) {
         const w = subtreeWidth.get(key) || 1;
@@ -1012,10 +1012,11 @@ function showUserTaskCard(task) {
     <button class="uq-dismiss"><img src="/img/ui/icons/small/x.png" width="10" height="10" /></button>
     <span class="uq-project" data-project="${escapeHtml(taskProject)}">${escapeHtml(taskProject)}</span>
     <div class="uq-subject">${escapeHtml(task.title || "(untitled)")}</div>
-    ${task.description ? `<div class="uq-content">${escapeHtml(task.description)}</div>` : ""}
+    ${task.description ? `<div class="uq-content uq-content--md">${renderMarkdown(task.description)}</div>` : ""}
     <div class="uq-actions">
       <button class="uq-respond-btn" data-action="accept">Accept</button>
       <button class="uq-respond-btn uq-respond-btn--done" data-action="done">Complete</button>
+      <button class="uq-respond-btn uq-respond-btn--cancel" data-action="cancel">Cancel</button>
       <button class="uq-respond-btn uq-respond-btn--nav" data-action="kanban"><img src="/img/ui/icons/small/arrow_right.png" width="8" height="8" class="uq-btn-icon" />Kanban</button>
     </div>
   `;
@@ -1063,6 +1064,21 @@ function showUserTaskCard(task) {
     } else {
       btn.disabled = false;
       btn.textContent = "Done";
+    }
+  });
+
+  card.querySelector('[data-action="cancel"]').addEventListener("click", async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = "...";
+    const result = await client.cancelTask(task.id, task.project || "default", "user");
+    if (result) {
+      card.style.opacity = "0";
+      card.style.transition = "opacity 0.3s ease";
+      setTimeout(() => card.remove(), 300);
+    } else {
+      btn.disabled = false;
+      btn.textContent = "Cancel";
     }
   });
 
@@ -1703,6 +1719,16 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+/** Render markdown to HTML using marked (loaded via CDN). Falls back to escaped text. */
+function renderMarkdown(text) {
+  if (typeof marked !== "undefined") {
+    try {
+      return marked.parse(text, { gfm: true, breaks: true });
+    } catch (_) { /* fall through */ }
+  }
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
 // --- Memory panel ---
 
 const tabMessages = document.getElementById("tab-messages");
@@ -1909,7 +1935,7 @@ function onNewTasks(tasks) {
 
   // Notify user of tasks dispatched to them
   for (const task of tasks) {
-    const isForUser = (task.profile_slug === "user" || task.profile_slug === "founder")
+    const isForUser = (task.profile_slug === "user" || task.profile_slug === "founder" || task.profile_slug === "human")
       && task.status === "pending" && !shownUserMsgs.has("task:" + task.id);
     if (isForUser) {
       shownUserMsgs.add("task:" + task.id);
@@ -2069,7 +2095,7 @@ function renderTasks() {
   const priority = tasksPriorityFilter.value;
 
   let filtered = getViewFilteredTasks();
-  if (showMyTasksOnly) filtered = filtered.filter(t => (t.profile_slug === "user" || t.profile_slug === "founder") && t.status !== "done");
+  if (showMyTasksOnly) filtered = filtered.filter(t => (t.profile_slug === "user" || t.profile_slug === "founder" || t.profile_slug === "human") && t.status !== "done");
   if (status) filtered = filtered.filter(t => t.status === status);
   if (priority) filtered = filtered.filter(t => t.priority === priority);
 
@@ -2116,7 +2142,7 @@ function renderTasks() {
     }
 
     const el = document.createElement("div");
-    const isMine = task.profile_slug === "user" || task.profile_slug === "founder";
+    const isMine = task.profile_slug === "user" || task.profile_slug === "founder" || task.profile_slug === "human";
     el.className = "task-item" + (isMine ? " task-mine" : "");
     el.dataset.taskId = task.id;
 
@@ -2172,22 +2198,40 @@ setInterval(() => {
   if (activeTab === "tasks") loadTasks();
 }, 5000);
 
-// --- Font scale ---
+// --- Font scale (+/- zoom) ---
 
-const savedScale = localStorage.getItem("font-scale") || "1.2";
-document.body.style.setProperty("--scale", savedScale);
+const ZOOM_STEPS = [0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0];
+let currentZoomIdx = ZOOM_STEPS.indexOf(parseFloat(localStorage.getItem("font-scale") || "1"));
+if (currentZoomIdx < 0) currentZoomIdx = ZOOM_STEPS.indexOf(1.0);
 
-document.querySelectorAll(".scale-btn").forEach(btn => {
-  if (btn.dataset.scale === savedScale) btn.classList.add("active");
-  else btn.classList.remove("active");
+const zoomOutBtn = document.getElementById("zoom-out");
+const zoomInBtn = document.getElementById("zoom-in");
+const zoomLevelEl = document.getElementById("zoom-level");
 
-  btn.addEventListener("click", () => {
-    const scale = btn.dataset.scale;
-    document.body.style.setProperty("--scale", scale);
-    localStorage.setItem("font-scale", scale);
-    document.querySelectorAll(".scale-btn").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-  });
+function applyZoom() {
+  const scale = ZOOM_STEPS[currentZoomIdx];
+  document.body.style.setProperty("--scale", scale);
+  localStorage.setItem("font-scale", String(scale));
+  if (zoomLevelEl) zoomLevelEl.textContent = Math.round(scale * 100) + "%";
+  if (zoomOutBtn) zoomOutBtn.disabled = currentZoomIdx === 0;
+  if (zoomInBtn) zoomInBtn.disabled = currentZoomIdx === ZOOM_STEPS.length - 1;
+}
+applyZoom();
+
+if (zoomOutBtn) zoomOutBtn.addEventListener("click", () => {
+  if (currentZoomIdx > 0) { currentZoomIdx--; applyZoom(); }
+});
+if (zoomInBtn) zoomInBtn.addEventListener("click", () => {
+  if (currentZoomIdx < ZOOM_STEPS.length - 1) { currentZoomIdx++; applyZoom(); }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+  if ((e.key === "+" || e.key === "=") && !e.ctrlKey && !e.metaKey) {
+    if (currentZoomIdx < ZOOM_STEPS.length - 1) { currentZoomIdx++; applyZoom(); }
+  } else if (e.key === "-" && !e.ctrlKey && !e.metaKey) {
+    if (currentZoomIdx > 0) { currentZoomIdx--; applyZoom(); }
+  }
 });
 
 // --- Agent task label integration ---
@@ -2807,3 +2851,35 @@ function toggleHelp() {
 if (helpBtn) helpBtn.addEventListener("click", toggleHelp);
 if (helpClose) helpClose.addEventListener("click", toggleHelp);
 if (helpOverlay) helpOverlay.addEventListener("click", toggleHelp);
+
+// --- Zoom controls ---
+const ZOOM_STEPS = [0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0];
+const ZOOM_DEFAULT = 2; // index of 1.0 in ZOOM_STEPS
+let zoomIndex = parseInt(localStorage.getItem("relay-zoom") ?? ZOOM_DEFAULT, 10);
+if (zoomIndex < 0 || zoomIndex >= ZOOM_STEPS.length) zoomIndex = ZOOM_DEFAULT;
+
+const zoomInBtn = document.getElementById("zoom-in");
+const zoomOutBtn = document.getElementById("zoom-out");
+const zoomLabel = document.getElementById("zoom-level");
+
+function applyZoom() {
+  const scale = ZOOM_STEPS[zoomIndex];
+  document.body.style.setProperty("--scale", scale);
+  if (zoomLabel) zoomLabel.textContent = Math.round(scale * 100) + "%";
+  localStorage.setItem("relay-zoom", zoomIndex);
+}
+applyZoom();
+
+if (zoomInBtn) zoomInBtn.addEventListener("click", () => {
+  if (zoomIndex < ZOOM_STEPS.length - 1) { zoomIndex++; applyZoom(); }
+});
+if (zoomOutBtn) zoomOutBtn.addEventListener("click", () => {
+  if (zoomIndex > 0) { zoomIndex--; applyZoom(); }
+});
+
+shortcuts.register("+", "zoom-in", "Zoom in", () => {
+  if (zoomIndex < ZOOM_STEPS.length - 1) { zoomIndex++; applyZoom(); }
+});
+shortcuts.register("-", "zoom-out", "Zoom out", () => {
+  if (zoomIndex > 0) { zoomIndex--; applyZoom(); }
+});

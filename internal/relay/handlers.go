@@ -1359,6 +1359,17 @@ func (h *Handlers) HandleListTasks(ctx context.Context, req mcp.CallToolRequest)
 		tasks = []models.Task{}
 	}
 
+	// Truncate descriptions to save tokens in list view (use get_task for full details)
+	for i := range tasks {
+		if len(tasks[i].Description) > 200 {
+			tasks[i].Description = tasks[i].Description[:200] + "…"
+		}
+		if tasks[i].Result != nil && len(*tasks[i].Result) > 200 {
+			truncated := (*tasks[i].Result)[:200] + "…"
+			tasks[i].Result = &truncated
+		}
+	}
+
 	return resultJSON(map[string]any{
 		"count": len(tasks),
 		"tasks": tasks,

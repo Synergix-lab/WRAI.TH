@@ -1061,6 +1061,8 @@ func (r *Relay) apiTransitionTask(w http.ResponseWriter, req *http.Request, path
 		task, err = r.DB.CompleteTask(taskID, body.Agent, body.Project, body.Result)
 	case "blocked":
 		task, err = r.DB.BlockTask(taskID, body.Agent, body.Project, body.Reason)
+	case "cancelled":
+		task, err = r.DB.CancelTask(taskID, body.Agent, body.Project, body.Reason)
 	default:
 		http.Error(w, `{"error":"invalid status"}`, http.StatusBadRequest)
 		return
