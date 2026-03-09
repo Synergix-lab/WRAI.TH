@@ -22,7 +22,7 @@ func (d *DB) RegisterVault(project, path string) error {
 
 func (d *DB) GetVaultConfig(project string) (*models.VaultConfig, error) {
 	var cfg models.VaultConfig
-	err := d.conn.QueryRow("SELECT project, path FROM vaults WHERE project = ?", project).Scan(&cfg.Project, &cfg.Path)
+	err := d.ro().QueryRow("SELECT project, path FROM vaults WHERE project = ?", project).Scan(&cfg.Project, &cfg.Path)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -33,7 +33,7 @@ func (d *DB) GetVaultConfig(project string) (*models.VaultConfig, error) {
 }
 
 func (d *DB) ListVaultConfigs() ([]models.VaultConfig, error) {
-	rows, err := d.conn.Query("SELECT project, path FROM vaults ORDER BY project")
+	rows, err := d.ro().Query("SELECT project, path FROM vaults ORDER BY project")
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (d *DB) DeleteVaultDoc(project, path string) error {
 
 func (d *DB) GetVaultDoc(project, path string) (*models.VaultDoc, error) {
 	// Try project-specific first, then fall back to _relay
-	doc, err := scanVaultDoc(d.conn.QueryRow(
+	doc, err := scanVaultDoc(d.ro().QueryRow(
 		"SELECT "+vaultDocColumns+" FROM vault_docs WHERE project IN (?, '_relay') AND path = ? ORDER BY CASE WHEN project = ? THEN 0 ELSE 1 END LIMIT 1",
 		project, path, project,
 	))
@@ -127,7 +127,7 @@ func (d *DB) SearchVault(project, query string, tags []string, limit int) ([]mod
 	q += " ORDER BY rank LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := d.conn.Query(q, args...)
+	rows, err := d.ro().Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search vault: %w", err)
 	}
@@ -162,7 +162,7 @@ func (d *DB) ListVaultDocs(project string, tags []string, limit int) ([]models.V
 	q += " ORDER BY path LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := d.conn.Query(q, args...)
+	rows, err := d.ro().Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list vault docs: %w", err)
 	}
@@ -185,7 +185,7 @@ func (d *DB) ListAllVaultDocs(limit int) ([]models.VaultDoc, error) {
 		limit = 500
 	}
 	q := "SELECT " + vaultDocColumns + " FROM vault_docs ORDER BY project, path LIMIT ?"
-	rows, err := d.conn.Query(q, limit)
+	rows, err := d.ro().Query(q, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list all vault docs: %w", err)
 	}
@@ -217,12 +217,12 @@ func (d *DB) GetVaultDocsByPaths(project string, patterns []string, maxTotalByte
 		if strings.Contains(pattern, "*") {
 			// Convert glob to SQL LIKE: "guides/supabase-*.md" → "guides/supabase-%.md"
 			like := strings.ReplaceAll(pattern, "*", "%")
-			rows, err = d.conn.Query(
+			rows, err = d.ro().Query(
 				"SELECT "+vaultDocColumns+" FROM vault_docs WHERE project = ? AND path LIKE ? ORDER BY path",
 				project, like,
 			)
 		} else {
-			rows, err = d.conn.Query(
+			rows, err = d.ro().Query(
 				"SELECT "+vaultDocColumns+" FROM vault_docs WHERE project = ? AND path = ?",
 				project, pattern,
 			)
@@ -265,7 +265,7 @@ func (d *DB) GetVaultDocsByTags(project string, tags []string, maxTotalBytes int
 	}
 
 	q := "SELECT " + vaultDocColumns + " FROM vault_docs WHERE project = ? AND (" + strings.Join(conditions, " OR ") + ") ORDER BY size_bytes ASC"
-	rows, err := d.conn.Query(q, args...)
+	rows, err := d.ro().Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get vault docs by tags: %w", err)
 	}
@@ -289,7 +289,7 @@ func (d *DB) GetVaultDocsByTags(project string, tags []string, maxTotalBytes int
 
 func (d *DB) GetVaultStats(project string) (int, int, error) {
 	var count, totalSize int
-	err := d.conn.QueryRow(
+	err := d.ro().QueryRow(
 		"SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM vault_docs WHERE project = ?",
 		project,
 	).Scan(&count, &totalSize)

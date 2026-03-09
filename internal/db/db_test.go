@@ -14,17 +14,28 @@ import (
 func testDB(t *testing.T) *DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	conn, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-20000&_foreign_keys=ON")
+
+	// Writer pool (matches production config)
+	writer, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=10000&_synchronous=NORMAL&_cache_size=-20000&_foreign_keys=ON&_txlock=immediate")
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatalf("open writer: %v", err)
 	}
-	conn.SetMaxOpenConns(4)
-	conn.SetMaxIdleConns(2)
-	if err := migrate(conn); err != nil {
+	writer.SetMaxOpenConns(1)
+	writer.SetMaxIdleConns(1)
+
+	// Reader pool (matches production config)
+	reader, err := sql.Open("sqlite3", dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=10000&_foreign_keys=ON")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	reader.SetMaxOpenConns(10)
+	reader.SetMaxIdleConns(5)
+
+	if err := migrate(writer); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
-	return &DB{conn: conn, path: dbPath}
+	t.Cleanup(func() { reader.Close(); writer.Close() })
+	return &DB{conn: writer, reader: reader, path: dbPath}
 }
 
 func TestConcurrentReadsAndWrite(t *testing.T) {

@@ -81,7 +81,7 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 }
 
 func (d *DB) GetProfile(project, slug string) (*models.Profile, error) {
-	p, err := scanProfile(d.conn.QueryRow(
+	p, err := scanProfile(d.ro().QueryRow(
 		"SELECT "+profileColumns+" FROM profiles WHERE slug = ? AND project = ?",
 		slug, project,
 	))
@@ -95,7 +95,7 @@ func (d *DB) GetProfile(project, slug string) (*models.Profile, error) {
 }
 
 func (d *DB) ListProfiles(project string) ([]models.Profile, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		"SELECT "+profileColumns+" FROM profiles WHERE project = ? ORDER BY slug",
 		project,
 	)
@@ -116,7 +116,7 @@ func (d *DB) ListProfiles(project string) ([]models.Profile, error) {
 }
 
 func (d *DB) ListAllProfiles() ([]models.Profile, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		"SELECT " + profileColumns + " FROM profiles ORDER BY project, slug",
 	)
 	if err != nil {
@@ -138,7 +138,7 @@ func (d *DB) ListAllProfiles() ([]models.Profile, error) {
 // FindProfilesBySkillTag returns profiles whose skills JSON contains the given tag.
 func (d *DB) FindProfilesBySkillTag(project, tag string) ([]models.Profile, error) {
 	// SQLite JSON: search in the skills JSON array for objects containing the tag
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT `+profileColumns+` FROM profiles
 		 WHERE project = ? AND skills LIKE ?
 		 ORDER BY slug`,

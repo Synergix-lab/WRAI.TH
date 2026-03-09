@@ -32,7 +32,7 @@ func (d *DB) CreateOrg(name, slug, description string) (*models.Org, error) {
 }
 
 func (d *DB) ListOrgs() ([]models.Org, error) {
-	rows, err := d.conn.Query(`SELECT id, name, slug, description, created_at FROM orgs ORDER BY name`)
+	rows, err := d.ro().Query(`SELECT id, name, slug, description, created_at FROM orgs ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list orgs: %w", err)
 	}
@@ -51,7 +51,7 @@ func (d *DB) ListOrgs() ([]models.Org, error) {
 
 func (d *DB) GetOrg(slug string) (*models.Org, error) {
 	var o models.Org
-	err := d.conn.QueryRow(
+	err := d.ro().QueryRow(
 		`SELECT id, name, slug, description, created_at FROM orgs WHERE slug = ?`, slug,
 	).Scan(&o.ID, &o.Name, &o.Slug, &o.Description, &o.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -96,7 +96,7 @@ func (d *DB) CreateTeam(name, slug, project, description, teamType string, orgID
 }
 
 func (d *DB) ListTeams(project string) ([]models.Team, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT id, name, slug, org_id, project, description, type, parent_team_id, created_at
 		 FROM teams WHERE project = ? ORDER BY name`, project,
 	)
@@ -118,7 +118,7 @@ func (d *DB) ListTeams(project string) ([]models.Team, error) {
 }
 
 func (d *DB) ListAllTeams() ([]models.Team, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT id, name, slug, org_id, project, description, type, parent_team_id, created_at
 		 FROM teams ORDER BY project, name`,
 	)
@@ -141,7 +141,7 @@ func (d *DB) ListAllTeams() ([]models.Team, error) {
 
 func (d *DB) GetTeam(project, slug string) (*models.Team, error) {
 	var t models.Team
-	err := d.conn.QueryRow(
+	err := d.ro().QueryRow(
 		`SELECT id, name, slug, org_id, project, description, type, parent_team_id, created_at
 		 FROM teams WHERE project = ? AND slug = ?`, project, slug,
 	).Scan(&t.ID, &t.Name, &t.Slug, &t.OrgID, &t.Project,
@@ -157,7 +157,7 @@ func (d *DB) GetTeam(project, slug string) (*models.Team, error) {
 
 func (d *DB) GetTeamByID(teamID string) (*models.Team, error) {
 	var t models.Team
-	err := d.conn.QueryRow(
+	err := d.ro().QueryRow(
 		`SELECT id, name, slug, org_id, project, description, type, parent_team_id, created_at
 		 FROM teams WHERE id = ?`, teamID,
 	).Scan(&t.ID, &t.Name, &t.Slug, &t.OrgID, &t.Project,
@@ -202,7 +202,7 @@ func (d *DB) RemoveTeamMember(teamID, agentName string) error {
 }
 
 func (d *DB) GetTeamMembers(teamID string) ([]models.TeamMember, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT team_id, agent_name, project, role, joined_at, left_at
 		 FROM team_members WHERE team_id = ? AND left_at IS NULL ORDER BY role, agent_name`, teamID,
 	)
@@ -224,7 +224,7 @@ func (d *DB) GetTeamMembers(teamID string) ([]models.TeamMember, error) {
 
 // GetTeamMemberNames returns active member names for a team.
 func (d *DB) GetTeamMemberNames(teamID string) ([]string, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT agent_name FROM team_members WHERE team_id = ? AND left_at IS NULL`, teamID,
 	)
 	if err != nil {
@@ -245,7 +245,7 @@ func (d *DB) GetTeamMemberNames(teamID string) ([]string, error) {
 
 // GetAgentTeams returns teams an agent belongs to.
 func (d *DB) GetAgentTeams(project, agentName string) ([]models.Team, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT t.id, t.name, t.slug, t.org_id, t.project, t.description, t.type, t.parent_team_id, t.created_at
 		 FROM teams t
 		 JOIN team_members tm ON t.id = tm.team_id
@@ -285,7 +285,7 @@ func (d *DB) GetTeamInbox(teamID string, limit int) ([]models.Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT m.id, m.from_agent, m.to_agent, m.reply_to, m.type, m.subject, m.content,
 		        m.metadata, m.created_at, m.read_at, m.conversation_id, m.project
 		 FROM messages m
@@ -322,7 +322,7 @@ func (d *DB) AddNotifyChannel(agentName, project, target string) error {
 }
 
 func (d *DB) GetNotifyChannels(agentName, project string) ([]string, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT target FROM agent_notify_channels WHERE agent_name = ? AND project = ?`,
 		agentName, project,
 	)
@@ -355,7 +355,7 @@ func (d *DB) CanMessage(project, sender, target string) (bool, error) {
 	// Broadcast: sender must be in an admin-type team
 	if target == "*" {
 		var count int
-		err := d.conn.QueryRow(
+		err := d.ro().QueryRow(
 			`SELECT COUNT(*) FROM team_members tm
 			 JOIN teams t ON tm.team_id = t.id
 			 WHERE tm.agent_name = ? AND tm.project = ? AND tm.left_at IS NULL AND t.type = 'admin'`,
@@ -369,7 +369,7 @@ func (d *DB) CanMessage(project, sender, target string) (bool, error) {
 
 	// Check if sender is in an admin team (unrestricted)
 	var adminCount int
-	d.conn.QueryRow(
+	d.ro().QueryRow(
 		`SELECT COUNT(*) FROM team_members tm
 		 JOIN teams t ON tm.team_id = t.id
 		 WHERE tm.agent_name = ? AND tm.project = ? AND tm.left_at IS NULL AND t.type = 'admin'`,
@@ -381,7 +381,7 @@ func (d *DB) CanMessage(project, sender, target string) (bool, error) {
 
 	// Same team check
 	var sameTeam int
-	d.conn.QueryRow(
+	d.ro().QueryRow(
 		`SELECT COUNT(*) FROM team_members tm1
 		 JOIN team_members tm2 ON tm1.team_id = tm2.team_id
 		 WHERE tm1.agent_name = ? AND tm2.agent_name = ? AND tm1.project = ?
@@ -394,7 +394,7 @@ func (d *DB) CanMessage(project, sender, target string) (bool, error) {
 
 	// reports_to chain check (direct only — sender reports to target or target reports to sender)
 	var reportsChain int
-	d.conn.QueryRow(
+	d.ro().QueryRow(
 		`SELECT COUNT(*) FROM agents
 		 WHERE project = ? AND (
 			(name = ? AND reports_to = ?) OR
@@ -408,7 +408,7 @@ func (d *DB) CanMessage(project, sender, target string) (bool, error) {
 
 	// Notify channels check
 	var notifyCount int
-	d.conn.QueryRow(
+	d.ro().QueryRow(
 		`SELECT COUNT(*) FROM agent_notify_channels
 		 WHERE agent_name = ? AND project = ? AND target = ?`,
 		sender, project, target,
@@ -423,7 +423,7 @@ func (d *DB) CanMessage(project, sender, target string) (bool, error) {
 // HasTeams returns true if any teams exist for the project (to skip permission check when no teams are configured).
 func (d *DB) HasTeams(project string) (bool, error) {
 	var count int
-	err := d.conn.QueryRow(`SELECT COUNT(*) FROM teams WHERE project = ?`, project).Scan(&count)
+	err := d.ro().QueryRow(`SELECT COUNT(*) FROM teams WHERE project = ?`, project).Scan(&count)
 	return count > 0, err
 }
 
@@ -444,7 +444,7 @@ type TeamMembershipInfo struct {
 
 // GetAllTeamMemberships returns all active team memberships across all projects.
 func (d *DB) GetAllTeamMemberships() ([]TeamMembershipInfo, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT tm.agent_name, tm.project, t.slug, t.name, t.type, tm.role
 		 FROM team_members tm
 		 JOIN teams t ON tm.team_id = t.id

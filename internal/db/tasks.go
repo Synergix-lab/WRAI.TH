@@ -170,7 +170,7 @@ func (d *DB) transitionTask(taskID, agentName, project, newStatus string, result
 }
 
 func (d *DB) GetTask(taskID, project string) (*models.Task, error) {
-	t, err := scanTask(d.conn.QueryRow(
+	t, err := scanTask(d.ro().QueryRow(
 		"SELECT "+taskColumns+" FROM tasks WHERE id = ? AND project = ?",
 		taskID, project,
 	))
@@ -197,7 +197,7 @@ func (d *DB) getSubtasks(parentID, project string, depth, maxDepth int) ([]model
 	if depth >= maxDepth {
 		return nil, nil
 	}
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		"SELECT "+taskColumns+" FROM tasks WHERE parent_task_id = ? AND project = ? ORDER BY dispatched_at",
 		parentID, project,
 	)
@@ -263,7 +263,7 @@ func (d *DB) GetAgentTasks(project, agentName string) (assignedToMe []models.Tas
 
 // queryTasks runs a query and collects all tasks, closing rows before returning.
 func (d *DB) queryTasks(query string, args ...any) ([]models.Task, error) {
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.ro().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +282,7 @@ func (d *DB) queryTasks(query string, args ...any) ([]models.Task, error) {
 // GetUnackedTasks returns pending tasks older than minAge that haven't been notified yet.
 func (d *DB) GetUnackedTasks(minAge time.Duration) ([]models.Task, error) {
 	cutoff := time.Now().UTC().Add(-minAge).Format(memoryTimeFmt)
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		"SELECT "+taskColumns+" FROM tasks WHERE status = 'pending' AND dispatched_at < ?",
 		cutoff,
 	)
@@ -322,7 +322,7 @@ func (d *DB) GetParentChain(taskID, project string) ([]models.Task, error) {
 	currentID := taskID
 	for i := 0; i < 5; i++ {
 		var parentID *string
-		err := d.conn.QueryRow("SELECT parent_task_id FROM tasks WHERE id = ? AND project = ?", currentID, project).Scan(&parentID)
+		err := d.ro().QueryRow("SELECT parent_task_id FROM tasks WHERE id = ? AND project = ?", currentID, project).Scan(&parentID)
 		if err != nil || parentID == nil {
 			break
 		}
@@ -368,7 +368,7 @@ func (d *DB) ListTasks(project, status, profileSlug, priority, assignedTo, board
 	query += " ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 END, dispatched_at DESC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.ro().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
@@ -389,7 +389,7 @@ func (d *DB) ListAllTasks(limit int) ([]models.Task, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		"SELECT "+taskColumns+" FROM tasks WHERE archived_at IS NULL ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 END, dispatched_at DESC LIMIT ?",
 		limit,
 	)
@@ -463,14 +463,14 @@ func (d *DB) FindSimilarTasks(project, profileSlug, title string) ([]models.Task
 // Returns (allComplete, total, doneCount).
 func (d *DB) CheckSubtasksComplete(parentTaskID, project string) (bool, int, int) {
 	var total, doneCount int
-	_ = d.conn.QueryRow(
+	_ = d.ro().QueryRow(
 		"SELECT COUNT(*) FROM tasks WHERE parent_task_id = ? AND project = ?",
 		parentTaskID, project,
 	).Scan(&total)
 	if total == 0 {
 		return false, 0, 0
 	}
-	_ = d.conn.QueryRow(
+	_ = d.ro().QueryRow(
 		"SELECT COUNT(*) FROM tasks WHERE parent_task_id = ? AND project = ? AND status IN ('done','cancelled')",
 		parentTaskID, project,
 	).Scan(&doneCount)
@@ -490,7 +490,7 @@ func (d *DB) GetTasksSince(project, since string, limit int) ([]models.Task, err
 	query += " ORDER BY dispatched_at ASC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.ro().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get tasks since: %w", err)
 	}

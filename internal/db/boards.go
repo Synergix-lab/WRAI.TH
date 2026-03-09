@@ -40,7 +40,7 @@ func (d *DB) CreateBoard(project, name, slug, description, createdBy string) (*m
 }
 
 func (d *DB) ListBoards(project string) ([]models.Board, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT `+boardColumns+` FROM boards WHERE project = ? AND archived_at IS NULL ORDER BY created_at`,
 		project,
 	)
@@ -61,7 +61,7 @@ func (d *DB) ListBoards(project string) ([]models.Board, error) {
 }
 
 func (d *DB) ListAllBoards() ([]models.Board, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		`SELECT ` + boardColumns + ` FROM boards WHERE archived_at IS NULL ORDER BY project, created_at`,
 	)
 	if err != nil {
@@ -81,7 +81,7 @@ func (d *DB) ListAllBoards() ([]models.Board, error) {
 }
 
 func (d *DB) GetBoard(project, slug string) (*models.Board, error) {
-	b, err := scanBoard(d.conn.QueryRow(
+	b, err := scanBoard(d.ro().QueryRow(
 		`SELECT `+boardColumns+` FROM boards WHERE project = ? AND slug = ?`,
 		project, slug,
 	))

@@ -10,8 +10,9 @@ import (
 )
 
 type DB struct {
-	conn *sql.DB
-	path string
+	conn   *sql.DB // writer: single connection, serializes all writes
+	reader *sql.DB // reader: multiple connections for concurrent reads
+	path   string
 }
 
 func New() (*DB, error) {
@@ -26,25 +27,46 @@ func New() (*DB, error) {
 	}
 
 	dbPath := filepath.Join(dbDir, "relay.db")
-	conn, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-20000&_foreign_keys=ON")
+
+	// Writer pool: single connection serializes writes at Go level (SQLite only allows 1 writer).
+	writer, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=10000&_synchronous=NORMAL&_cache_size=-20000&_foreign_keys=ON&_txlock=immediate")
 	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
+		return nil, fmt.Errorf("open writer db: %w", err)
 	}
+	writer.SetMaxOpenConns(1)
+	writer.SetMaxIdleConns(1)
+	writer.Exec("PRAGMA temp_store = MEMORY")
 
-	// Allow concurrent reads (WAL mode supports this), serialize writes only.
-	conn.SetMaxOpenConns(4)
-	conn.SetMaxIdleConns(2)
+	// Reader pool: multiple connections for concurrent reads via WAL.
+	reader, err := sql.Open("sqlite3", dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=10000&_foreign_keys=ON")
+	if err != nil {
+		writer.Close()
+		return nil, fmt.Errorf("open reader db: %w", err)
+	}
+	reader.SetMaxOpenConns(10)
+	reader.SetMaxIdleConns(5)
+	reader.Exec("PRAGMA mmap_size = 268435456") // 256MB
+	reader.Exec("PRAGMA temp_store = MEMORY")
+	reader.Exec("PRAGMA cache_size = -20000") // 20MB
 
-	if err := migrate(conn); err != nil {
-		conn.Close()
+	if err := migrate(writer); err != nil {
+		writer.Close()
+		reader.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &DB{conn: conn, path: dbPath}, nil
+	return &DB{conn: writer, reader: reader, path: dbPath}, nil
 }
 
 func (d *DB) Close() error {
+	d.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	d.reader.Close()
 	return d.conn.Close()
+}
+
+// ro returns the read-only connection pool.
+func (d *DB) ro() *sql.DB {
+	return d.reader
 }
 
 // Path returns the database file path.
@@ -52,7 +74,7 @@ func (d *DB) Path() string {
 	return d.path
 }
 
-// Optimize runs PRAGMA optimize and a passive WAL checkpoint.
+// Optimize runs PRAGMA optimize and a passive WAL checkpoint on the writer.
 // Safe to call periodically (e.g. every 5 minutes).
 func (d *DB) Optimize() {
 	d.conn.Exec("PRAGMA optimize")
