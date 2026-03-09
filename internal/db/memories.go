@@ -517,7 +517,7 @@ func (d *DB) MemoryStats(project string) (total int, conflicts int, err error) {
 		q += " AND project = ?"
 		args = append(args, project)
 	}
-	err = d.conn.QueryRow(q, args...).Scan(&total, &conflicts)
+	err = d.ro().QueryRow(q, args...).Scan(&total, &conflicts)
 	return
 }
 
@@ -561,7 +561,7 @@ func (d *DB) findActiveMemory(project, scope, agentName, key string) (*models.Me
 }
 
 func (d *DB) queryMemories(query string, args ...any) ([]models.Memory, error) {
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.ro().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query memories: %w", err)
 	}

@@ -66,7 +66,7 @@ func (d *DB) ListConversations(project, agentName string) ([]models.Conversation
 		ORDER BY c.created_at DESC
 	`
 
-	rows, err := d.conn.Query(query, agentName, agentName, agentName, project)
+	rows, err := d.ro().Query(query, agentName, agentName, agentName, project)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
@@ -100,7 +100,7 @@ func (d *DB) GetConversationMessages(conversationID string, limit int) ([]models
 }
 
 func (d *DB) GetConversationMembers(conversationID string) ([]models.ConversationMember, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		"SELECT conversation_id, agent_name, joined_at, left_at FROM conversation_members WHERE conversation_id = ? AND left_at IS NULL",
 		conversationID,
 	)
@@ -122,7 +122,7 @@ func (d *DB) GetConversationMembers(conversationID string) ([]models.Conversatio
 
 func (d *DB) IsConversationMember(conversationID, agentName string) (bool, error) {
 	var count int
-	err := d.conn.QueryRow(
+	err := d.ro().QueryRow(
 		"SELECT COUNT(*) FROM conversation_members WHERE conversation_id = ? AND agent_name = ? AND left_at IS NULL",
 		conversationID, agentName,
 	).Scan(&count)
@@ -160,7 +160,7 @@ func (d *DB) AddConversationMember(conversationID, agentName string) error {
 
 func (d *DB) ConversationExists(conversationID string) (bool, error) {
 	var count int
-	err := d.conn.QueryRow("SELECT COUNT(*) FROM conversations WHERE id = ?", conversationID).Scan(&count)
+	err := d.ro().QueryRow("SELECT COUNT(*) FROM conversations WHERE id = ?", conversationID).Scan(&count)
 	if err != nil {
 		return false, err
 	}

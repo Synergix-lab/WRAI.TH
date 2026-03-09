@@ -13,22 +13,22 @@ type Stats struct {
 func (d *DB) GetStats(project string) (*Stats, error) {
 	s := &Stats{}
 
-	err := d.conn.QueryRow("SELECT COUNT(*) FROM agents WHERE project = ?", project).Scan(&s.Agents)
+	err := d.ro().QueryRow("SELECT COUNT(*) FROM agents WHERE project = ?", project).Scan(&s.Agents)
 	if err != nil {
 		return nil, err
 	}
 
-	err = d.conn.QueryRow("SELECT COUNT(*) FROM messages WHERE project = ?", project).Scan(&s.Messages)
+	err = d.ro().QueryRow("SELECT COUNT(*) FROM messages WHERE project = ?", project).Scan(&s.Messages)
 	if err != nil {
 		return nil, err
 	}
 
-	err = d.conn.QueryRow("SELECT COUNT(*) FROM messages WHERE read_at IS NULL AND project = ?", project).Scan(&s.Unread)
+	err = d.ro().QueryRow("SELECT COUNT(*) FROM messages WHERE read_at IS NULL AND project = ?", project).Scan(&s.Unread)
 	if err != nil {
 		return nil, err
 	}
 
-	err = d.conn.QueryRow(`
+	err = d.ro().QueryRow(`
 		SELECT COUNT(DISTINCT CASE WHEN reply_to IS NULL THEN id ELSE reply_to END)
 		FROM messages
 		WHERE project = ?
@@ -39,7 +39,7 @@ func (d *DB) GetStats(project string) (*Stats, error) {
 
 	// Oldest agent registration as uptime proxy.
 	var oldest *string
-	err = d.conn.QueryRow("SELECT MIN(registered_at) FROM agents WHERE project = ?", project).Scan(&oldest)
+	err = d.ro().QueryRow("SELECT MIN(registered_at) FROM agents WHERE project = ?", project).Scan(&oldest)
 	if err == nil && oldest != nil {
 		s.OldestAgent = *oldest
 	}
@@ -51,22 +51,22 @@ func (d *DB) GetStats(project string) (*Stats, error) {
 func (d *DB) GetGlobalStats() (*Stats, error) {
 	s := &Stats{}
 
-	err := d.conn.QueryRow("SELECT COUNT(*) FROM agents").Scan(&s.Agents)
+	err := d.ro().QueryRow("SELECT COUNT(*) FROM agents").Scan(&s.Agents)
 	if err != nil {
 		return nil, err
 	}
 
-	err = d.conn.QueryRow("SELECT COUNT(*) FROM messages").Scan(&s.Messages)
+	err = d.ro().QueryRow("SELECT COUNT(*) FROM messages").Scan(&s.Messages)
 	if err != nil {
 		return nil, err
 	}
 
-	err = d.conn.QueryRow("SELECT COUNT(*) FROM messages WHERE read_at IS NULL").Scan(&s.Unread)
+	err = d.ro().QueryRow("SELECT COUNT(*) FROM messages WHERE read_at IS NULL").Scan(&s.Unread)
 	if err != nil {
 		return nil, err
 	}
 
-	err = d.conn.QueryRow(`
+	err = d.ro().QueryRow(`
 		SELECT COUNT(DISTINCT CASE WHEN reply_to IS NULL THEN id ELSE reply_to END)
 		FROM messages
 	`).Scan(&s.Threads)
@@ -75,7 +75,7 @@ func (d *DB) GetGlobalStats() (*Stats, error) {
 	}
 
 	var oldest *string
-	err = d.conn.QueryRow("SELECT MIN(registered_at) FROM agents").Scan(&oldest)
+	err = d.ro().QueryRow("SELECT MIN(registered_at) FROM agents").Scan(&oldest)
 	if err == nil && oldest != nil {
 		s.OldestAgent = *oldest
 	}
@@ -86,13 +86,13 @@ func (d *DB) GetGlobalStats() (*Stats, error) {
 // AgentCount returns just the number of agents (for lightweight status check).
 func (d *DB) AgentCount() (int, error) {
 	var n int
-	err := d.conn.QueryRow("SELECT COUNT(*) FROM agents").Scan(&n)
+	err := d.ro().QueryRow("SELECT COUNT(*) FROM agents").Scan(&n)
 	return n, err
 }
 
 // UnreadCount returns the total number of unread messages across all agents.
 func (d *DB) UnreadCount() (int, error) {
 	var n int
-	err := d.conn.QueryRow("SELECT COUNT(*) FROM messages WHERE read_at IS NULL").Scan(&n)
+	err := d.ro().QueryRow("SELECT COUNT(*) FROM messages WHERE read_at IS NULL").Scan(&n)
 	return n, err
 }

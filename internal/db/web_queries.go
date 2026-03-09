@@ -15,7 +15,7 @@ func (d *DB) ListAllConversations(project string) ([]models.ConversationWithMemb
 		ORDER BY c.created_at DESC
 	`
 
-	rows, err := d.conn.Query(query, project)
+	rows, err := d.ro().Query(query, project)
 	if err != nil {
 		return nil, fmt.Errorf("list all conversations: %w", err)
 	}
@@ -82,7 +82,7 @@ func (d *DB) GetMessagesSince(project, since string, limit int) ([]models.Messag
 
 // ListAllAgents returns all agents across all projects, ordered by project then name.
 func (d *DB) ListAllAgents() ([]models.Agent, error) {
-	rows, err := d.conn.Query("SELECT "+agentColumns+" FROM agents WHERE status IN ('active', 'sleeping', 'inactive') ORDER BY project, name")
+	rows, err := d.ro().Query("SELECT "+agentColumns+" FROM agents WHERE status IN ('active', 'sleeping', 'inactive') ORDER BY project, name")
 	if err != nil {
 		return nil, fmt.Errorf("list all agents: %w", err)
 	}
@@ -140,7 +140,7 @@ func (d *DB) ListAllConversationsAcrossProjects() ([]models.ConversationWithMemb
 		ORDER BY c.created_at DESC
 	`
 
-	rows, err := d.conn.Query(query)
+	rows, err := d.ro().Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("list all conversations across projects: %w", err)
 	}
@@ -174,7 +174,7 @@ func (d *DB) ListAllConversationsAcrossProjects() ([]models.ConversationWithMemb
 
 // ListProjects returns all distinct project names across agents, messages, and conversations.
 func (d *DB) ListProjects() ([]string, error) {
-	rows, err := d.conn.Query(`
+	rows, err := d.ro().Query(`
 		SELECT DISTINCT project FROM (
 			SELECT project FROM agents
 			UNION

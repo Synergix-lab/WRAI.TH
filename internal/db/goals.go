@@ -56,7 +56,7 @@ func (d *DB) CreateGoal(project, goalType, title, description, createdBy string,
 }
 
 func (d *DB) GetGoal(goalID, project string) (*models.Goal, error) {
-	g, err := scanGoal(d.conn.QueryRow(
+	g, err := scanGoal(d.ro().QueryRow(
 		"SELECT "+goalColumns+" FROM goals WHERE id = ? AND project = ?",
 		goalID, project,
 	))
@@ -106,7 +106,7 @@ func (d *DB) ListAllGoals(limit int) ([]models.Goal, error) {
 }
 
 func (d *DB) queryGoals(query string, args ...any) ([]models.Goal, error) {
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.ro().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func (d *DB) GetGoalAncestry(goalID, project string) ([]models.Goal, error) {
 	currentID := goalID
 	for i := 0; i < 5; i++ {
 		var parentID *string
-		err := d.conn.QueryRow("SELECT parent_goal_id FROM goals WHERE id = ? AND project = ?", currentID, project).Scan(&parentID)
+		err := d.ro().QueryRow("SELECT parent_goal_id FROM goals WHERE id = ? AND project = ?", currentID, project).Scan(&parentID)
 		if err != nil || parentID == nil {
 			break
 		}
@@ -180,11 +180,11 @@ func (d *DB) GetGoalAncestry(goalID, project string) ([]models.Goal, error) {
 }
 
 func (d *DB) GetGoalProgress(goalID, project string) (total int, done int) {
-	_ = d.conn.QueryRow(
+	_ = d.ro().QueryRow(
 		"SELECT COUNT(*) FROM tasks WHERE goal_id = ? AND project = ?",
 		goalID, project,
 	).Scan(&total)
-	_ = d.conn.QueryRow(
+	_ = d.ro().QueryRow(
 		"SELECT COUNT(*) FROM tasks WHERE goal_id = ? AND project = ? AND status IN ('done','cancelled')",
 		goalID, project,
 	).Scan(&done)

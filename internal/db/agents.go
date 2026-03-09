@@ -80,7 +80,7 @@ func (d *DB) TouchAgent(project, name string) error {
 }
 
 func (d *DB) ListAgents(project string) ([]models.Agent, error) {
-	rows, err := d.conn.Query("SELECT "+agentColumns+" FROM agents WHERE project = ? AND status IN ('active', 'sleeping', 'inactive') ORDER BY name", project)
+	rows, err := d.ro().Query("SELECT "+agentColumns+" FROM agents WHERE project = ? AND status IN ('active', 'sleeping', 'inactive') ORDER BY name", project)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -142,7 +142,7 @@ func (d *DB) DeleteAgent(project, name string) error {
 }
 
 func (d *DB) GetAgent(project, name string) (*models.Agent, error) {
-	a, err := scanAgent(d.conn.QueryRow("SELECT "+agentColumns+" FROM agents WHERE name = ? AND project = ?", name, project))
+	a, err := scanAgent(d.ro().QueryRow("SELECT "+agentColumns+" FROM agents WHERE name = ? AND project = ?", name, project))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -154,7 +154,7 @@ func (d *DB) GetAgent(project, name string) (*models.Agent, error) {
 
 // GetOrgTree returns all active agents ordered for tree display (managers first).
 func (d *DB) GetOrgTree(project string) ([]models.Agent, error) {
-	rows, err := d.conn.Query(
+	rows, err := d.ro().Query(
 		"SELECT "+agentColumns+" FROM agents WHERE project = ? AND status = 'active' ORDER BY reports_to IS NULL DESC, reports_to, name",
 		project,
 	)
@@ -176,7 +176,7 @@ func (d *DB) GetOrgTree(project string) ([]models.Agent, error) {
 
 // GetKnownSessionIDs returns the set of session_ids from all registered agents.
 func (d *DB) GetKnownSessionIDs() map[string]bool {
-	rows, err := d.conn.Query("SELECT session_id FROM agents WHERE session_id IS NOT NULL AND session_id != ''")
+	rows, err := d.ro().Query("SELECT session_id FROM agents WHERE session_id IS NOT NULL AND session_id != ''")
 	if err != nil {
 		return nil
 	}

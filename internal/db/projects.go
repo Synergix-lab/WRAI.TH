@@ -37,7 +37,7 @@ func (d *DB) EnsureProject(name string) {
 // GetProject returns a project by name.
 func (d *DB) GetProject(name string) (*models.Project, error) {
 	var p models.Project
-	err := d.conn.QueryRow("SELECT name, planet_type, created_at FROM projects WHERE name = ?", name).Scan(&p.Name, &p.PlanetType, &p.CreatedAt)
+	err := d.ro().QueryRow("SELECT name, planet_type, created_at FROM projects WHERE name = ?", name).Scan(&p.Name, &p.PlanetType, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -56,7 +56,7 @@ func (d *DB) UpdateProjectPlanetType(name, planetType string) error {
 // GetSetting returns a setting value by key.
 func (d *DB) GetSetting(key string) string {
 	var val string
-	d.conn.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&val)
+	d.ro().QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&val)
 	return val
 }
 
@@ -101,7 +101,7 @@ func (d *DB) DeleteProject(name string) error {
 
 // ListProjectsWithInfo returns all projects with their planet_type and stats.
 func (d *DB) ListProjectsWithInfo() ([]models.ProjectInfo, error) {
-	rows, err := d.conn.Query(`
+	rows, err := d.ro().Query(`
 		SELECT p.name, p.planet_type, p.created_at,
 			COALESCE(ac.agent_count, 0),
 			COALESCE(ac.online_count, 0),

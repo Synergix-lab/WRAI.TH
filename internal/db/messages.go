@@ -74,7 +74,7 @@ func (d *DB) GetThread(messageID string) ([]models.Message, error) {
 	rootID := messageID
 	for {
 		var replyTo *string
-		err := d.conn.QueryRow("SELECT reply_to FROM messages WHERE id = ?", rootID).Scan(&replyTo)
+		err := d.ro().QueryRow("SELECT reply_to FROM messages WHERE id = ?", rootID).Scan(&replyTo)
 		if err != nil {
 			break
 		}
@@ -168,7 +168,7 @@ func (d *DB) GetMessage(id string) (*models.Message, error) {
 // Returns the full ID if exactly one match is found.
 func (d *DB) FindMessageByPrefix(prefix string) (string, error) {
 	var ids []string
-	rows, err := d.conn.Query("SELECT id FROM messages WHERE id LIKE ?", prefix+"%")
+	rows, err := d.ro().Query("SELECT id FROM messages WHERE id LIKE ?", prefix+"%")
 	if err != nil {
 		return "", err
 	}
@@ -190,7 +190,7 @@ func (d *DB) FindMessageByPrefix(prefix string) (string, error) {
 }
 
 func (d *DB) queryMessages(query string, args ...any) ([]models.Message, error) {
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.ro().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
 	}
