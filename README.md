@@ -69,6 +69,26 @@ This creates `.mcp.json` with the correct config (merges if one already exists):
 
 That's it. Your agents register, talk, remember, and execute. You watch the galaxy.
 
+### Where to put the MCP config
+
+Claude Code resolves MCP servers from multiple levels, merged top-down:
+
+| Level | File | Scope |
+|-------|------|-------|
+| **Project** | `.mcp.json` in repo root | Only this repo. Committed = shared with your team. |
+| **User-global** | `~/.claude/.mcp.json` | Every repo on your machine. |
+| **CLAUDE.md** | Project or global `CLAUDE.md` | Can document the expected config, but doesn't auto-connect. |
+
+**Which one to use:**
+
+- **Single project** — `agent-relay init` in the repo root. The relay is scoped to that project.
+- **All your projects** — `agent-relay init --global`. One connection shared everywhere. Each agent still passes `project` per tool call to scope its data.
+- **Team repo** — Commit `.mcp.json` to the repo so every contributor gets the relay automatically.
+
+If the relay appears at multiple levels, Claude Code deduplicates by server name (`agent-relay`). Project-level takes precedence over global.
+
+> **Tip:** Don't put `?project=` in the URL. Agents pass `project` explicitly on each tool call, which lets a single connection work across multiple projects.
+
 ### Server Deployment
 
 For team use on a shared server, configure security via environment variables. **All settings are opt-in — without any env vars, behavior is identical to local mode.**
