@@ -3,11 +3,11 @@ set -euo pipefail
 
 # Claude Agentic Relay — Cross-platform installer (macOS + Linux)
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Synergix-lab/claude-agentic-relay/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Synergix-lab/WRAI.TH/main/install.sh | bash
 #   curl -fsSL ... | bash -s -- --port 9000 --skip-projects --no-service
 #   ./install.sh --uninstall
 
-REPO="Synergix-lab/claude-agentic-relay"
+REPO="Synergix-lab/WRAI.TH"
 BINARY_NAME="agent-relay"
 SERVICE_LABEL="com.agent-relay"
 DEFAULT_PORT=8090
@@ -32,7 +32,7 @@ info()    { echo "${BLUE}${BOLD}::${RESET} $*"; }
 success() { echo "${GREEN}${BOLD}✓${RESET} $*"; }
 warn()    { echo "${YELLOW}${BOLD}!${RESET} $*"; }
 error()   { echo "${RED}${BOLD}✗${RESET} $*" >&2; }
-step()    { echo; echo "${MAGENTA}${BOLD}[$1/6]${RESET} ${BOLD}$2${RESET}"; }
+step()    { echo; echo "${MAGENTA}${BOLD}[$1/7]${RESET} ${BOLD}$2${RESET}"; }
 
 die() { error "$@"; exit 1; }
 
@@ -255,6 +255,76 @@ create_ar_symlink() {
   fi
 
   ln -sf "$bin_path" "$ar_path" 2>/dev/null || true
+}
+
+# ── Step 0: Dependency check ────────────────────────────────────────────────
+
+check_dependencies() {
+  step 0 "Checking dependencies"
+
+  local missing_required=()
+  local missing_optional=()
+
+  # Required: curl (for downloads + health check)
+  if ! command -v curl &>/dev/null; then
+    missing_required+=("curl")
+  else
+    success "curl"
+  fi
+
+  # Build deps (optional — fallback to prebuilt if missing)
+  if command -v go &>/dev/null; then
+    local go_version
+    go_version=$(go version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+' | head -1)
+    success "go (${go_version})"
+  else
+    missing_optional+=("go (will download prebuilt binary instead of building from source)")
+  fi
+
+  if command -v cc &>/dev/null || command -v gcc &>/dev/null || command -v clang &>/dev/null; then
+    success "C compiler"
+  elif command -v go &>/dev/null; then
+    missing_optional+=("C compiler (cc/gcc/clang — needed for CGO/SQLite, will download prebuilt)")
+  fi
+
+  # git (for clone if building from source)
+  if command -v git &>/dev/null; then
+    success "git"
+  else
+    missing_optional+=("git (needed for build from source)")
+  fi
+
+  # jq — needed for hook scripts
+  if command -v jq &>/dev/null; then
+    success "jq"
+  else
+    missing_optional+=("jq (activity hooks use jq to parse JSON — hooks will be installed but won't work without it)")
+  fi
+
+  # python3 or jq — for config merging
+  if command -v python3 &>/dev/null; then
+    success "python3 (for config merging)"
+  elif command -v jq &>/dev/null; then
+    success "jq (for config merging)"
+  else
+    missing_optional+=("python3 or jq (for merging .mcp.json — will create new files but can't merge with existing)")
+  fi
+
+  # Report
+  if [[ ${#missing_required[@]} -gt 0 ]]; then
+    echo
+    for dep in "${missing_required[@]}"; do
+      error "Missing required: ${BOLD}${dep}${RESET}"
+    done
+    die "Install the missing dependencies and retry."
+  fi
+
+  if [[ ${#missing_optional[@]} -gt 0 ]]; then
+    echo
+    for dep in "${missing_optional[@]}"; do
+      warn "Optional: ${dep}"
+    done
+  fi
 }
 
 # ── Step 1: Install binary ──────────────────────────────────────────────────
@@ -503,6 +573,9 @@ install_hooks() {
 
   # Create PostToolUse hook script
   cat > "$hooks_dir/ingest-post-tool.sh" <<'HOOK_EOF'
+#!/usr/bin/env bash
+command -v jq &>/dev/null || exit 0
+
 EVENTS_DIR="$HOME/.pixel-office/events"
 mkdir -p "$EVENTS_DIR"
 
@@ -523,6 +596,9 @@ HOOK_EOF
 
   # Create Stop hook script
   cat > "$hooks_dir/ingest-stop.sh" <<'HOOK_EOF'
+#!/usr/bin/env bash
+command -v jq &>/dev/null || exit 0
+
 EVENTS_DIR="$HOME/.pixel-office/events"
 mkdir -p "$EVENTS_DIR"
 
@@ -540,7 +616,10 @@ exit 0
 HOOK_EOF
   chmod +x "$hooks_dir/ingest-stop.sh"
 
-  # Merge hooks into Claude Code settings.json
+  # Merge hooks into Claude Code settings.json (backup first)
+  if [[ -f "$settings_file" ]]; then
+    cp "$settings_file" "${settings_file}.bak" 2>/dev/null || true
+  fi
   if command -v python3 &>/dev/null; then
     python3 -c "
 import json, os
@@ -825,6 +904,9 @@ configure_project() {
       return 0
     fi
 
+    # Backup before merging
+    cp "$mcp_path" "${mcp_path}.bak" 2>/dev/null || true
+
     # Merge into existing .mcp.json using python3 or jq
     if command -v python3 &>/dev/null; then
       python3 -c "
@@ -968,6 +1050,7 @@ main() {
   fi
 
   banner
+  check_dependencies
 
   # Check port conflict
   if lsof -i ":${PORT}" &>/dev/null 2>&1 || ss -tlnp 2>/dev/null | grep -q ":${PORT} "; then

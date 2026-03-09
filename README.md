@@ -42,7 +42,12 @@ curl -fsSL https://raw.githubusercontent.com/Synergix-lab/WRAI.TH/main/install.s
 irm https://raw.githubusercontent.com/Synergix-lab/WRAI.TH/main/install.ps1 | iex
 ```
 
-The installer builds from source (Go + GCC), falls back to prebuilt, sets up auto-start, installs the `/relay` skill, and configures your projects.
+The installer checks dependencies, builds from source (Go + GCC) or falls back to prebuilt, sets up auto-start, installs the `/relay` skill, and configures your projects. Existing `.mcp.json` files are merged (never overwritten) with a `.bak` backup.
+
+**Update** to the latest version:
+```bash
+agent-relay update
+```
 
 **Or** generate the MCP config manually:
 
@@ -1124,13 +1129,13 @@ Each activity state shows as a live glow on the robot sprite. No network calls â
 
 Opinionated tooling built for a specific workflow. Moves fast.
 
-Something breaks? [Open an issue](https://github.com/Synergix-lab/claude-agentic-relay/issues). Want to contribute? [Open a PR](https://github.com/Synergix-lab/claude-agentic-relay/pulls).
+Something breaks? [Open an issue](https://github.com/Synergix-lab/WRAI.TH/issues). Want to contribute? [Open a PR](https://github.com/Synergix-lab/WRAI.TH/pulls).
 
 **Stack:** Go 1.22+, SQLite FTS5 (`mattn/go-sqlite3`), `mcp-go`, Vanilla JS, Canvas 2D
 
 ```bash
-git clone https://github.com/Synergix-lab/claude-agentic-relay.git
-cd claude-agentic-relay
+git clone https://github.com/Synergix-lab/WRAI.TH.git
+cd WRAI.TH
 CGO_ENABLED=1 go build -tags fts5 -o agent-relay .
 ./agent-relay serve
 ```
