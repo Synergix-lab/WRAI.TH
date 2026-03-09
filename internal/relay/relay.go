@@ -105,6 +105,7 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 		server.ServerTool{Tool: deleteAgentTool(), Handler: handlers.HandleDeleteAgent},
 		server.ServerTool{Tool: sleepAgentTool(), Handler: handlers.HandleSleepAgent},
 		// Project lifecycle
+		server.ServerTool{Tool: createProjectTool(), Handler: handlers.HandleCreateProject},
 		server.ServerTool{Tool: deleteProjectTool(), Handler: handlers.HandleDeleteProject},
 		// Soul RAG
 		server.ServerTool{Tool: queryContextTool(), Handler: handlers.HandleQueryContext},

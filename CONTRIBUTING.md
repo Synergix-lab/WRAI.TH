@@ -6,8 +6,8 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ```bash
 # Clone
-git clone https://github.com/Synergix-lab/claude-agentic-relay.git
-cd claude-agentic-relay
+git clone https://github.com/Synergix-lab/WRAI.TH.git
+cd WRAI.TH
 
 # Build (requires Go 1.23+ and a C compiler for CGO/SQLite)
 CGO_ENABLED=1 go build -tags fts5 -o agent-relay .
@@ -37,7 +37,7 @@ install.ps1   Windows installer
 
 ### 1. Start with an issue
 
-Before writing code, open a [Feature Request](https://github.com/Synergix-lab/claude-agentic-relay/issues/new?template=feature.yml). Describe:
+Before writing code, open a [Feature Request](https://github.com/Synergix-lab/WRAI.TH/issues/new?template=feature.yml). Describe:
 - The problem or friction you're hitting
 - Your proposed solution
 - Which component is affected (MCP tools, UI, memory, tasks, etc.)
@@ -52,8 +52,8 @@ Wait for a maintainer to respond. Small fixes and docs can skip this step — ju
 
 ```bash
 # Fork on GitHub, then:
-git clone https://github.com/YOUR-USERNAME/claude-agentic-relay.git
-cd claude-agentic-relay
+git clone https://github.com/YOUR-USERNAME/WRAI.TH.git
+cd WRAI.TH
 git checkout -b feat/your-feature-name
 ```
 
@@ -97,7 +97,7 @@ A maintainer will review. We aim for fast turnaround. Once approved, the PR is s
 
 ## What to work on
 
-- Check [open issues](https://github.com/Synergix-lab/claude-agentic-relay/issues) — look for `good first issue` labels
+- Check [open issues](https://github.com/Synergix-lab/WRAI.TH/issues) — look for `good first issue` labels
 - Join the [Discord](https://discord.gg/QPq7qfbEk8) to discuss ideas
 - The MCP tools were designed by agents themselves — if you use the relay and hit friction, that's a valid feature request
 

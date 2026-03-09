@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"agent-relay/internal/db"
@@ -1166,5 +1167,62 @@ func TestOptionalString(t *testing.T) {
 	}
 	if *optionalString("hello") != "hello" {
 		t.Error("expected 'hello'")
+	}
+}
+
+func TestCreateProject(t *testing.T) {
+	h := testHandlers(t)
+
+	// New project returns onboarding prompt
+	res, err := h.HandleCreateProject(ctx, call(map[string]any{"name": "test-app"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatal("expected success")
+	}
+	text := res.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "Colony Setup") {
+		t.Error("expected onboarding prompt with 'Colony Setup'")
+	}
+	if !strings.Contains(text, "test-app") {
+		t.Error("expected project name in prompt")
+	}
+	if !strings.Contains(text, "Phase 7") {
+		t.Error("expected all 7 phases")
+	}
+	if !strings.Contains(text, "--dangerously-skip-permissions") {
+		t.Error("expected spawn commands with skip-permissions flag")
+	}
+	if !strings.Contains(text, "send_message") {
+		t.Error("expected worker ping-ready instruction")
+	}
+
+	// Second call with agents already registered should return already_configured
+	h.db.EnsureProject("test-app")
+	_, _ = h.HandleRegisterAgent(ctx, call(map[string]any{
+		"name": "cto", "project": "test-app", "role": "lead",
+	}))
+	res2, err := h.HandleCreateProject(ctx, call(map[string]any{"name": "test-app"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data := parseJSON(t, res2)
+	if data["status"] != "already_configured" {
+		t.Errorf("expected already_configured, got %v", data["status"])
+	}
+}
+
+func TestCreateProjectValidation(t *testing.T) {
+	h := testHandlers(t)
+
+	// Missing name
+	res, err := h.HandleCreateProject(ctx, call(map[string]any{}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := expectError(t, res)
+	if !strings.Contains(msg, "name is required") {
+		t.Errorf("expected 'name is required', got: %s", msg)
 	}
 }

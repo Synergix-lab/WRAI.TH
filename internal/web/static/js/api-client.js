@@ -376,6 +376,10 @@ export class APIClient {
     }
   }
 
+  async cancelTask(taskId, project, agent) {
+    return this.transitionTask(taskId, "cancelled", project, agent);
+  }
+
   async fetchAllTeams() {
     try {
       const res = await fetch("/api/teams/all");

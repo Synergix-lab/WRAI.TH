@@ -880,7 +880,7 @@ export class KanbanBoard {
   }
 
   _renderCard(task) {
-    const isFounder = task.profile_slug === 'founder' || task.profile_slug === 'user';
+    const isFounder = task.profile_slug === 'founder' || task.profile_slug === 'user' || task.profile_slug === 'human';
     const card = document.createElement('div');
     card.className = 'kb-card' + (task.priority === 'P0' ? ' kb-p0' : '') + (isFounder ? ' kb-founder' : '');
     card.draggable = true;

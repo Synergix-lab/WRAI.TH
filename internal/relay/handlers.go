@@ -1359,6 +1359,17 @@ func (h *Handlers) HandleListTasks(ctx context.Context, req mcp.CallToolRequest)
 		tasks = []models.Task{}
 	}
 
+	// Truncate descriptions to save tokens in list view (use get_task for full details)
+	for i := range tasks {
+		if len(tasks[i].Description) > 200 {
+			tasks[i].Description = tasks[i].Description[:200] + "…"
+		}
+		if tasks[i].Result != nil && len(*tasks[i].Result) > 200 {
+			truncated := (*tasks[i].Result)[:200] + "…"
+			tasks[i].Result = &truncated
+		}
+	}
+
 	return resultJSON(map[string]any{
 		"count": len(tasks),
 		"tasks": tasks,
@@ -1510,6 +1521,269 @@ func (h *Handlers) HandleDeleteAgent(ctx context.Context, req mcp.CallToolReques
 		"deleted": true,
 		"agent":   name,
 	})
+}
+
+func (h *Handlers) HandleCreateProject(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name := strings.ToLower(req.GetString("name", ""))
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+	description := req.GetString("description", "")
+	cwd := req.GetString("cwd", "")
+
+	// Create project in DB
+	h.db.EnsureProject(name)
+
+	// Check if already configured
+	agents, _ := h.db.ListAgents(name)
+	if len(agents) > 0 {
+		return resultJSON(map[string]any{
+			"project": name,
+			"status":  "already_configured",
+			"agents":  len(agents),
+			"hint":    "Project already has agents. Use register_agent to join, or delete_project to start over.",
+		})
+	}
+
+	interactive := false
+	if v, ok := req.GetArguments()["interactive"]; ok {
+		if b, ok := v.(bool); ok {
+			interactive = b
+		}
+	}
+
+	// Return the onboarding mega-prompt as plain text
+	prompt := buildOnboardingPrompt(name, description, cwd, interactive)
+	return mcp.NewToolResultText(prompt), nil
+}
+
+func buildOnboardingPrompt(name, description, cwd string, interactive bool) string {
+	var b strings.Builder
+
+	b.WriteString("# Colony Setup — " + name + "\n\n")
+	b.WriteString("You are the **setup agent** for project `" + name + "` on the Agent Relay. ")
+	b.WriteString("Your job is to configure the entire relay infrastructure so multi-agent work can begin. ")
+	b.WriteString("Think of this like founding a colony in a management game — you place the buildings, assign roles, and set objectives before the workers arrive.\n\n")
+
+	if interactive {
+		b.WriteString("**MODE: INTERACTIVE** — At the end of each phase, present your findings and proposed actions to the user. Wait for their approval before executing. Do NOT create anything without confirmation.\n\n")
+	} else {
+		b.WriteString("**Before starting**, ask the user:\n\n")
+		b.WriteString("> **Auto mode** or **Interactive mode**?\n")
+		b.WriteString("> - **Auto**: I execute everything autonomously. You get a summary at the end.\n")
+		b.WriteString("> - **Interactive**: I present my findings at each phase and wait for your approval before creating anything.\n\n")
+		b.WriteString("If the user picks interactive, add CHECKPOINT pauses after Phase 2 (present analysis), before Phase 3 (approve vault docs), before Phase 5 (approve teams/profiles), and before Phase 8 (approve sprint tasks). At each checkpoint, present what you plan to do and wait for confirmation.\n\n")
+		b.WriteString("If the user picks auto (or says nothing after 10 seconds), execute everything in order without stopping.\n\n")
+	}
+
+	if description != "" {
+		b.WriteString("**Project description:** " + description + "\n\n")
+	}
+	if cwd != "" {
+		b.WriteString("**Project root:** `" + cwd + "`\n\n")
+	}
+
+	b.WriteString("---\n\n")
+
+	// Phase 1 — Learn the relay
+	b.WriteString("## Phase 1 — Learn the relay\n\n")
+	b.WriteString("The relay embeds its own documentation. Read it first:\n\n")
+	b.WriteString("```\n")
+	b.WriteString("search_vault({ query: \"boot sequence\", project: \"_relay\" })\n")
+	b.WriteString("search_vault({ query: \"profiles vault_paths soul_keys\", project: \"_relay\" })\n")
+	b.WriteString("search_vault({ query: \"memory scopes layers\", project: \"_relay\" })\n")
+	b.WriteString("search_vault({ query: \"teams permissions\", project: \"_relay\" })\n")
+	b.WriteString("search_vault({ query: \"task dispatch boards\", project: \"_relay\" })\n")
+	b.WriteString("```\n\n")
+	b.WriteString("Read the results carefully. This is how the system works.\n\n")
+
+	b.WriteString("---\n\n")
+
+	// Phase 2 — Analyze the codebase
+	b.WriteString("## Phase 2 — Analyze the codebase\n\n")
+	b.WriteString("Thoroughly explore the project to understand:\n\n")
+	b.WriteString("- **Domain**: What does this project do? Who is it for?\n")
+	b.WriteString("- **Tech stack**: Languages, frameworks, databases, package manager, runtime\n")
+	b.WriteString("- **Architecture**: Monorepo? Microservices? Key modules and data flow\n")
+	b.WriteString("- **Conventions**: Naming, code style, commit format, testing approach\n")
+	b.WriteString("- **Infrastructure**: Hosting, CI/CD, env vars, deployment\n")
+	b.WriteString("- **Auth**: How authentication works (if applicable)\n")
+	b.WriteString("- **API**: REST/GraphQL/tRPC patterns (if applicable)\n\n")
+	b.WriteString("Read at minimum: main entry point, package manifest (package.json / go.mod / Cargo.toml / etc.), config files, README, and 3-5 core source files.\n\n")
+	b.WriteString("Write down your findings — you store them as memories in Phase 4.\n\n")
+
+	if interactive {
+		b.WriteString("**CHECKPOINT:** Present your findings to the user:\n")
+		b.WriteString("- Domain summary\n- Tech stack with versions\n- Architecture overview\n- Key conventions\n")
+		b.WriteString("- Proposed project name (if different from `" + name + "`)\n")
+		b.WriteString("- List of teams you plan to create\n- List of profiles you plan to register\n\n")
+		b.WriteString("Wait for approval before continuing.\n\n")
+	}
+
+	b.WriteString("---\n\n")
+
+	// Phase 3 — Create the vault
+	b.WriteString("## Phase 3 — Create the vault\n\n")
+	b.WriteString("Create an Obsidian-compatible vault **next to** the repo (not inside it):\n\n")
+	b.WriteString("```bash\nmkdir -p ../obsidian/" + name + "\n```\n\n")
+	b.WriteString("Write markdown docs based on your analysis:\n\n")
+	b.WriteString("| File | Content |\n|------|---------|\n")
+	b.WriteString("| `architecture.md` | System overview, module map, data flow |\n")
+	b.WriteString("| `stack.md` | Full tech stack with versions |\n")
+	b.WriteString("| `conventions.md` | Code style, naming, commit format, testing |\n")
+	b.WriteString("| `api.md` | Endpoints, protocols, session lifecycle (if applicable) |\n")
+	b.WriteString("| `env.md` | Required env vars (names only, never values) |\n\n")
+	b.WriteString("Then register it with the relay:\n\n")
+	b.WriteString("```\nregister_vault({ path: \"<absolute-path-to-vault>\", project: \"" + name + "\" })\n```\n\n")
+
+	b.WriteString("---\n\n")
+
+	// Phase 4 — Store project knowledge
+	b.WriteString("## Phase 4 — Store project knowledge\n\n")
+	b.WriteString("Use `set_memory` to persist what you learned. All memories use `scope: \"project\"`, `project: \"" + name + "\"`.\n\n")
+	b.WriteString("**Required memories:**\n\n")
+	b.WriteString("| Key | Layer | Tags | Content |\n|-----|-------|------|---------|\n")
+	b.WriteString("| `stack` | constraints | `[\"stack\", \"tech\"]` | Languages, frameworks, versions |\n")
+	b.WriteString("| `architecture` | constraints | `[\"architecture\", \"system\"]` | High-level structure, modules, data flow |\n")
+	b.WriteString("| `conventions` | behavior | `[\"conventions\", \"style\"]` | Naming, style, commits, testing |\n")
+	b.WriteString("| `domain` | constraints | `[\"domain\", \"product\"]` | What the product does, target users |\n")
+	b.WriteString("| `infra` | behavior | `[\"infra\", \"hosting\"]` | Hosting, CI, databases, deployment |\n\n")
+	b.WriteString("**Optional** (add if relevant): `auth-pattern`, `api-pattern`, `db-schema-overview`, `env-vars`\n\n")
+	b.WriteString("Use `confidence: \"observed\"` since you read the codebase directly.\n\n")
+
+	b.WriteString("---\n\n")
+
+	if interactive {
+		b.WriteString("**CHECKPOINT:** Show the user the vault docs and memories you plan to create. Wait for approval.\n\n")
+		b.WriteString("---\n\n")
+	}
+
+	// Phase 5 — Create the org
+	b.WriteString("## Phase 5 — Create the org\n\n")
+	b.WriteString("### 5a. Teams\n\n")
+	b.WriteString("Create teams based on what you discovered in Phase 2. The leadership team is always required:\n\n")
+	b.WriteString("```\n")
+	b.WriteString("create_team({ name: \"Leadership\", slug: \"leadership\", type: \"admin\", description: \"Executive team — broadcast and cross-team coordination\", project: \"" + name + "\" })\n")
+	b.WriteString("```\n\n")
+	b.WriteString("Then create **only the teams that match the actual codebase**. Examples:\n")
+	b.WriteString("- Go API → `backend` team only\n")
+	b.WriteString("- Next.js fullstack → `backend` + `frontend`\n")
+	b.WriteString("- Monorepo with infra → `backend` + `frontend` + `infra`\n")
+	b.WriteString("- Python ML project → `backend` + `data`\n")
+	b.WriteString("- CLI tool → `core` team only\n\n")
+	b.WriteString("Do NOT create teams for parts of the stack that don't exist.\n\n")
+
+	b.WriteString("### 5b. Profiles\n\n")
+	b.WriteString("Register role archetypes based on the teams you created. **Derive profiles from your Phase 2 analysis, not from a template.**\n\n")
+	b.WriteString("The **CTO** profile is always required:\n```\n")
+	b.WriteString("register_profile({\n")
+	b.WriteString("  slug: \"cto\",\n  name: \"CTO\",\n")
+	b.WriteString("  role: \"Technical leader. Owns the backlog, sets priorities, coordinates all teams, reviews architecture.\",\n")
+	b.WriteString("  context_pack: \"You are the CTO of " + name + ". You make architecture decisions, manage the task board, and coordinate between tech leads. You have broadcast permissions.\",\n")
+	b.WriteString("  skills: \"[{\\\"id\\\":\\\"architecture\\\",\\\"name\\\":\\\"System Architecture\\\",\\\"tags\\\":[\\\"architecture\\\",\\\"design\\\"]},{\\\"id\\\":\\\"management\\\",\\\"name\\\":\\\"Technical Management\\\",\\\"tags\\\":[\\\"management\\\",\\\"coordination\\\"]}]\",\n")
+	b.WriteString("  soul_keys: \"[\\\"stack\\\",\\\"architecture\\\",\\\"domain\\\",\\\"conventions\\\",\\\"infra\\\"]\",\n")
+	b.WriteString("  vault_paths: \"[\\\"architecture.md\\\",\\\"stack.md\\\"]\",\n")
+	b.WriteString("  project: \"" + name + "\"\n})\n```\n\n")
+	b.WriteString("For each additional team, create **one tech lead profile**. Use the actual stack in skills/context_pack:\n```\n")
+	b.WriteString("register_profile({\n")
+	b.WriteString("  slug: \"<team-slug>-lead\",\n  name: \"<Team> Tech Lead\",\n")
+	b.WriteString("  role: \"<what this role does, based on the actual codebase>\",\n")
+	b.WriteString("  context_pack: \"You are the <role> for " + name + ". <specific responsibilities based on what you found>\",\n")
+	b.WriteString("  skills: \"<JSON array — use ACTUAL languages/frameworks/tools from Phase 2>\",\n")
+	b.WriteString("  soul_keys: \"<JSON array — pick relevant memory keys>\",\n")
+	b.WriteString("  vault_paths: \"<JSON array — pick relevant vault docs>\",\n")
+	b.WriteString("  project: \"" + name + "\"\n})\n```\n\n")
+	b.WriteString("**Rules:**\n")
+	b.WriteString("- Only create profiles for teams that exist\n")
+	b.WriteString("- Skills must reference the real tech stack (e.g. \"Go 1.22\", \"SQLite\", \"React 19\"), never generic placeholders\n")
+	b.WriteString("- A Go-only project gets 0 frontend profiles. A fullstack project gets both. Use judgment.\n\n")
+
+	b.WriteString("### 5c. Register yourself as CTO\n\n")
+	b.WriteString("```\nwhoami({ salt: \"<generate-3-random-words>\" })\n```\n\n")
+	b.WriteString("Then:\n```\n")
+	b.WriteString("register_agent({\n")
+	b.WriteString("  name: \"cto\",\n  project: \"" + name + "\",\n")
+	b.WriteString("  role: \"Technical leader and architect. Owns the backlog, coordinates teams.\",\n")
+	b.WriteString("  is_executive: true,\n  profile_slug: \"cto\",\n")
+	b.WriteString("  session_id: \"<session_id from whoami>\"\n})\n```\n\n")
+
+	b.WriteString("### 5d. Team memberships\n\n")
+	b.WriteString("Add the CTO to **every functional team you created** as admin:\n\n")
+	b.WriteString("```\nadd_team_member({ team: \"<team-slug>\", agent_name: \"cto\", role: \"admin\", project: \"" + name + "\" })\n```\n\n")
+	b.WriteString("Repeat for each team from 5a (not leadership — the CTO is already there via auto-admin).\n\n")
+
+	b.WriteString("---\n\n")
+
+	// Phase 6 — Set goals & board
+	b.WriteString("## Phase 6 — Set goals & board\n\n")
+	b.WriteString("### 6a. Mission\n\n")
+	b.WriteString("```\ncreate_goal({\n  type: \"mission\",\n  title: \"<one-line mission for the project>\",\n  description: \"<what success looks like>\",\n  project: \"" + name + "\"\n})\n```\n\n")
+	b.WriteString("### 6b. Project goals\n\n")
+	b.WriteString("Break the mission into 2-4 concrete workstreams:\n\n")
+	b.WriteString("```\ncreate_goal({\n  type: \"project_goal\",\n  title: \"<workstream>\",\n  parent_goal_id: \"<mission ID>\",\n  project: \"" + name + "\"\n})\n```\n\n")
+	b.WriteString("### 6c. Backlog board\n\n")
+	b.WriteString("```\ncreate_board({ name: \"Backlog\", slug: \"backlog\", description: \"Main task board\", project: \"" + name + "\" })\n```\n\n")
+
+	b.WriteString("---\n\n")
+
+	// Phase 7 — Verify & spawn
+	b.WriteString("## Phase 7 — Verify & spawn workers\n\n")
+	b.WriteString("### 7a. Verify everything\n\n")
+	b.WriteString("Run checks:\n\n")
+	b.WriteString("```\n")
+	b.WriteString("list_agents({ project: \"" + name + "\" })\n")
+	b.WriteString("list_teams({ project: \"" + name + "\" })\n")
+	b.WriteString("list_profiles({ project: \"" + name + "\" })\n")
+	b.WriteString("list_goals({ project: \"" + name + "\" })\n")
+	b.WriteString("list_boards({ project: \"" + name + "\" })\n")
+	b.WriteString("```\n\n")
+
+	b.WriteString("### 7b. Spawn worker commands\n\n")
+	b.WriteString("For **each non-CTO profile** you created, output a ready-to-paste `claude` command.\n\n")
+	b.WriteString("Use this exact template for each worker (replace `<SLUG>`, `<ROLE>`, `<NAME>`):\n\n")
+	b.WriteString("```bash\nclaude -w --dangerously-skip-permissions \\\n")
+	b.WriteString("  \"You are the <ROLE> of " + name + ". Boot sequence:\n")
+	b.WriteString("  1. register_agent({ name: '<SLUG>', project: '" + name + "', profile_slug: '<SLUG>', reports_to: 'cto' })\n")
+	b.WriteString("  2. get_session_context() — read everything: profile, vault docs, memories, tasks\n")
+	b.WriteString("  3. Research the technologies and patterns mentioned in your context using web search. Get up to speed.\n")
+	b.WriteString("  4. set_memory() to persist your research findings in the relay (scope: 'agent', key: 'onboarding-research')\n")
+	b.WriteString("  5. send_message({ to: 'cto', type: 'notification', subject: 'Ready', content: '<NAME> onboarded and ready for tasks.' })\n")
+	b.WriteString("  6. Check your inbox and the board. Start working.\"\n")
+	b.WriteString("```\n\n")
+	b.WriteString("Output one command per profile. The user copies each into a separate terminal.\n\n")
+
+	b.WriteString("### 7c. Report\n\n")
+	b.WriteString("Summarize to the user:\n\n")
+	b.WriteString("- **Project**: name, planet type\n")
+	b.WriteString("- **Vault**: path, docs indexed\n")
+	b.WriteString("- **Memories**: keys stored\n")
+	b.WriteString("- **Teams**: list with types\n")
+	b.WriteString("- **Profiles**: list with roles\n")
+	b.WriteString("- **Goals**: mission + project goals\n")
+	b.WriteString("- **Board**: ready for tasks\n")
+	b.WriteString("- **CTO**: registered, executive, broadcast enabled\n")
+	b.WriteString("- **Spawn commands**: listed above, ready to paste\n\n")
+	b.WriteString("---\n\n")
+
+	// Phase 8 — Sprint planning
+	b.WriteString("## Phase 8 — Plan the first two sprints\n\n")
+	b.WriteString("Now that the colony is configured, plan the work.\n\n")
+	b.WriteString("Based on the project goals, codebase analysis, and current state of the project:\n\n")
+	b.WriteString("### Sprint 1 (immediate priorities)\n")
+	b.WriteString("Create 3-6 tasks for the most impactful work to do right now:\n\n")
+	b.WriteString("```\ndispatch_task({\n  title: \"<task title>\",\n  description: \"<what to do and acceptance criteria>\",\n  profile: \"<profile-slug>\",\n  priority: \"<p0-p3>\",\n  goal_id: \"<parent goal ID>\",\n  board_id: \"<backlog board ID>\",\n  project: \"" + name + "\"\n})\n```\n\n")
+	b.WriteString("### Sprint 2 (next up)\n")
+	b.WriteString("Create 3-6 more tasks for the next wave of work. These can depend on Sprint 1 outputs.\n\n")
+	b.WriteString("Assign profiles based on the skills needed. Distribute work across teams — don't overload one profile.\n\n")
+
+	if interactive {
+		b.WriteString("**CHECKPOINT:** Present the sprint plan to the user before dispatching tasks. Wait for approval.\n\n")
+	}
+
+	b.WriteString("---\n\n")
+	b.WriteString("**The colony is ready.** Paste the spawn commands from Phase 7 in separate terminals to deploy your workers. They will pick up tasks from the board automatically.\n")
+
+	return b.String()
 }
 
 func (h *Handlers) HandleDeleteProject(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

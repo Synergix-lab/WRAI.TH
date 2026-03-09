@@ -12,12 +12,18 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  --scale: 1.2;
+  --scale: 1;
   --font-xs: calc(9px * var(--scale));
   --font-sm: calc(11px * var(--scale));
   --font-md: calc(12px * var(--scale));
   --font-lg: calc(14px * var(--scale));
   --font-xl: calc(18px * var(--scale));
+}
+
+/* Scalable UI — sidebar, header, panels (not the canvas) */
+header, .sidebar, .panel, .detail-panel, #kanban-view, #vault-view,
+.help-modal, .quest-tracker, .user-questions-hud {
+  zoom: var(--scale);
 }
 
 /* Header */
@@ -131,6 +137,36 @@ header {
 }
 
 .mode-icon { font-size: 12px; }
+
+/* Zoom controls */
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+.zoom-btn {
+  background: rgba(108, 92, 231, 0.1);
+  border: 1px solid rgba(108, 92, 231, 0.2);
+  color: #8a8a9a;
+  font-size: 14px;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.zoom-btn:hover { color: #e0e0e8; background: rgba(108, 92, 231, 0.25); }
+.zoom-level {
+  font-size: 9px;
+  color: #6a6a80;
+  min-width: 30px;
+  text-align: center;
+}
 
 /* Right zone — tabs + help */
 .header-right {
@@ -878,6 +914,17 @@ main.mode-detail #vault-panel { display: none; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+.uq-card .uq-content--md {
+  white-space: normal;
+}
+.uq-card .uq-content--md p { margin: 0 0 4px 0; }
+.uq-card .uq-content--md p:last-child { margin-bottom: 0; }
+.uq-card .uq-content--md strong { color: #c0c8e0; }
+.uq-card .uq-content--md code { background: rgba(255,255,255,0.06); padding: 1px 3px; border-radius: 2px; font-size: 9px; }
+.uq-card .uq-content--md ul, .uq-card .uq-content--md ol { margin: 2px 0; padding-left: 16px; }
+.uq-card .uq-content--md li { margin-bottom: 2px; }
+.uq-card .uq-content--md pre { background: rgba(0,0,0,0.3); padding: 4px 6px; border-radius: 3px; overflow-x: auto; margin: 4px 0; }
+.uq-card .uq-content--md pre code { background: none; padding: 0; }
 
 /* Dismiss */
 .uq-card .uq-dismiss {
@@ -970,6 +1017,9 @@ main.mode-detail #vault-panel { display: none; }
   display: flex;
   gap: 5px;
   margin-top: 6px;
+}
+.uq-respond-btn--cancel {
+  --uq-accent: #ff5252;
 }
 .uq-respond-btn--nav {
   --uq-accent: #6c7a9a;

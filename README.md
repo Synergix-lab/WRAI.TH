@@ -42,7 +42,12 @@ curl -fsSL https://raw.githubusercontent.com/Synergix-lab/WRAI.TH/main/install.s
 irm https://raw.githubusercontent.com/Synergix-lab/WRAI.TH/main/install.ps1 | iex
 ```
 
-The installer builds from source (Go + GCC), falls back to prebuilt, sets up auto-start, installs the `/relay` skill, and configures your projects.
+The installer checks dependencies, builds from source (Go + GCC) or falls back to prebuilt, sets up auto-start, installs the `/relay` skill, and configures your projects. Existing `.mcp.json` files are merged (never overwritten) with a `.bak` backup.
+
+**Update** to the latest version:
+```bash
+agent-relay update
+```
 
 **Or** generate the MCP config manually:
 
@@ -335,107 +340,29 @@ export NODE_EXTRA_CA_CERTS=/path/to/your-ca.crt
 
 ### First project setup
 
-Once the relay is running, paste this prompt into Claude Code. Your agent will analyze the codebase, configure the relay, and set up the entire project autonomously:
-
-<details>
-<summary><b>Copy this bootstrap prompt</b></summary>
+One tool does everything. In Claude Code, call:
 
 ```
-You are setting up this project on the Agent Relay (wrai.th). The relay is running on localhost:8090 and the MCP tools are available.
-
-Do the following steps in order.
-
-## 0. Learn the relay
-
-The relay embeds its own documentation in the vault (project: _relay).
-Before configuring, search it to understand the available tools:
-
-search_vault({ query: "boot sequence" })
-search_vault({ query: "profiles vault_paths soul_keys" })
-search_vault({ query: "memory scopes layers" })
-search_vault({ query: "teams permissions" })
-search_vault({ query: "task dispatch boards" })
-
-Read the results carefully. This is how everything connects.
-
-## 1. Analyze the project
-
-Read the codebase to understand:
-- What this project does (purpose, domain)
-- Tech stack (languages, frameworks, databases, infra)
-- Project structure (monorepo? services? packages?)
-- Key conventions (naming, patterns, testing approach)
-
-## 2. Register the Obsidian vault (if one exists)
-
-Look for a docs/ or vault directory with .md files (Obsidian-style). Common locations:
-~/Documents/*-org/, ~/obsidian-vault/, ./docs/, ./wiki/
-
-If found, call register_vault({ path: "<absolute-path>" }) so the relay indexes it
-with FTS5 for all agents to search.
-
-## 3. Store project knowledge as memories
-
-Use set_memory to persist what you learned. Use scope "project" so all agents share it.
-
-Required memories (adapt keys to your project):
-- "stack" — languages, frameworks, versions
-- "architecture" — high-level structure
-- "conventions" — coding standards, commit style, linting
-- "infra" — hosting, CI, databases
-- "domain" — what the product does in one paragraph
-
-Optional but valuable:
-- "auth-pattern" — how auth works
-- "api-pattern" — REST/GraphQL/tRPC conventions
-- "db-schema-overview" — key tables and relationships
-- "deploy-process" — how to ship to prod
-- "env-vars" — required env vars (names only, never values)
-
-Use tags for discoverability: ["stack", "backend"], ["auth", "api"], etc.
-Use layer "constraints" for hard rules, "behavior" for defaults.
-
-## 4. Create the team structure
-
-Based on the project needs, call create_team for each functional group
-(e.g. backend, frontend, infra, marketing).
-
-Then call register_profile for each role the project needs. A profile is a
-reusable archetype — not a specific agent. Include:
-- slug: short identifier ("backend", "frontend", "devops")
-- name: display name ("Backend Developer")
-- role: what this role does
-- vault_paths: JSON array of doc patterns to auto-inject at boot
-  (e.g. ["team/souls/{slug}.md", "guides/*.md"])
-- soul_keys: JSON array of memory keys to preload at boot
-  (e.g. ["stack", "conventions", "api-pattern"])
-
-## 5. Set the mission
-
-Call create_goal with type "mission" — this is the top-level objective.
-Then break it into "project_goal" children if the project has clear workstreams.
-
-## 6. Register yourself
-
-Call register_agent with:
-- name: your role (e.g. "cto", "lead", "architect")
-- role: description of what you do
-- is_executive: true if you are the decision maker
-- project: this project name
-
-## 7. Report back
-
-Summarize what you configured:
-- Memories stored (list keys)
-- Teams created
-- Profiles registered
-- Goals set
-- Vault indexed (doc count if applicable)
+create_project({ name: "my-app", cwd: "/path/to/repo" })
 ```
 
-</details>
+This returns a full onboarding plan that Claude executes autonomously — like a management game tutorial. It will:
 
-The agent reads the relay's own embedded docs first, then maps your codebase, stores knowledge, creates teams, profiles, goals — everything needed for multi-agent work.
+1. Read the relay's embedded docs to learn the system
+2. Analyze your codebase (stack, architecture, conventions)
+3. Create an Obsidian vault with project documentation
+4. Store knowledge as shared memories
+5. Set up the org (teams, profiles, CTO agent)
+6. Define mission and project goals
+7. Output ready-to-paste `claude -w` commands to spawn worker agents
+
+Each spawned worker auto-onboards: loads context, researches the tech stack, updates memories, then pings the CTO that they're ready.
+
+**Interactive mode:** Add `interactive: true` to review and approve each phase before it executes — Claude will present its findings and proposed memories/teams/profiles for your approval before creating them:
+
+```
+create_project({ name: "my-app", cwd: "/path/to/repo", interactive: true })
+```
 
 <br>
 
@@ -1202,13 +1129,13 @@ Each activity state shows as a live glow on the robot sprite. No network calls �
 
 Opinionated tooling built for a specific workflow. Moves fast.
 
-Something breaks? [Open an issue](https://github.com/Synergix-lab/claude-agentic-relay/issues). Want to contribute? [Open a PR](https://github.com/Synergix-lab/claude-agentic-relay/pulls).
+Something breaks? [Open an issue](https://github.com/Synergix-lab/WRAI.TH/issues). Want to contribute? [Open a PR](https://github.com/Synergix-lab/WRAI.TH/pulls).
 
 **Stack:** Go 1.22+, SQLite FTS5 (`mattn/go-sqlite3`), `mcp-go`, Vanilla JS, Canvas 2D
 
 ```bash
-git clone https://github.com/Synergix-lab/claude-agentic-relay.git
-cd claude-agentic-relay
+git clone https://github.com/Synergix-lab/WRAI.TH.git
+cd WRAI.TH
 CGO_ENABLED=1 go build -tags fts5 -o agent-relay .
 ./agent-relay serve
 ```
