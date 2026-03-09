@@ -663,6 +663,19 @@ func deleteProjectTool() mcp.Tool {
 	)
 }
 
+// --- Project onboarding ---
+
+func createProjectTool() mcp.Tool {
+	return mcp.NewTool(
+		"create_project",
+		mcp.WithDescription("Set up a new project on the relay. This is the FIRST tool to call. It creates the project, analyzes your codebase, and returns a full onboarding plan that you must execute step by step — like a management game tutorial. You will become the setup agent: analyze the code, store knowledge, create the org (CTO + tech leads), set up the vault, profiles, goals, and board. Everything needed for multi-agent work."),
+		mcp.WithString("name", mcp.Description("Project name (lowercase, no spaces — e.g. 'my-app', 'acme-api')"), mcp.Required()),
+		mcp.WithString("description", mcp.Description("One-line description of the project")),
+		mcp.WithString("cwd", mcp.Description("Absolute path to the project root directory (for vault setup)")),
+		mcp.WithBoolean("interactive", mcp.Description("Interactive mode: present findings and wait for user approval at each phase instead of executing automatically. Default: false (auto mode).")),
+	)
+}
+
 // --- Soul RAG ---
 
 func queryContextTool() mcp.Tool {
