@@ -48,6 +48,11 @@ func StartCleanup(database *db.DB, done <-chan struct{}) {
 				} else if expired > 0 {
 					log.Printf("expired %d delivery(ies)", expired)
 				}
+				if expired, err := database.ExpireFileLocks(); err != nil {
+					log.Printf("expire file locks error: %v", err)
+				} else if expired > 0 {
+					log.Printf("expired %d file lock(s)", expired)
+				}
 				database.Optimize()
 			}
 		}

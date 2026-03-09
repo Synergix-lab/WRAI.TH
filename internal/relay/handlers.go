@@ -1285,6 +1285,61 @@ func (h *Handlers) HandleListTasks(ctx context.Context, req mcp.CallToolRequest)
 	})
 }
 
+// --- File locks ---
+
+func (h *Handlers) HandleClaimFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	project := resolveProject(req)
+	agent := resolveAgent(req)
+	filePaths := req.GetString("file_paths", "[]")
+	ttlSeconds := req.GetInt("ttl_seconds", 1800)
+
+	lock, err := h.db.ClaimFiles(project, agent, filePaths, ttlSeconds)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to claim files: %v", err)), nil
+	}
+
+	// Auto-broadcast steering message
+	subject := fmt.Sprintf("%s claimed files", agent)
+	content := fmt.Sprintf("%s is now editing: %s", agent, filePaths)
+	h.db.InsertMessage(project, agent, "*", "notification", subject, content, fmt.Sprintf(`{"tags":["file-lock"],"file_paths":%s}`, filePaths), "P1", 0, nil, nil)
+
+	return resultJSON(lock)
+}
+
+func (h *Handlers) HandleReleaseFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	project := resolveProject(req)
+	agent := resolveAgent(req)
+	filePaths := req.GetString("file_paths", "[]")
+
+	if err := h.db.ReleaseFiles(project, agent, filePaths); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to release files: %v", err)), nil
+	}
+
+	// Auto-broadcast info message
+	subject := fmt.Sprintf("%s released files", agent)
+	content := fmt.Sprintf("%s released: %s", agent, filePaths)
+	h.db.InsertMessage(project, agent, "*", "notification", subject, content, fmt.Sprintf(`{"tags":["file-lock"],"file_paths":%s}`, filePaths), "P3", 3600, nil, nil)
+
+	return resultJSON(map[string]any{"released": filePaths})
+}
+
+func (h *Handlers) HandleListLocks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	project := resolveProject(req)
+
+	locks, err := h.db.ListFileLocks(project)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to list locks: %v", err)), nil
+	}
+	if locks == nil {
+		locks = []models.FileLock{}
+	}
+
+	return resultJSON(map[string]any{
+		"count": len(locks),
+		"locks": locks,
+	})
+}
+
 // --- Agent lifecycle ---
 
 func (h *Handlers) HandleDeactivateAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

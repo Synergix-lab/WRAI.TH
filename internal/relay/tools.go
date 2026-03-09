@@ -593,6 +593,37 @@ func listVaultDocsTool() mcp.Tool {
 	)
 }
 
+// --- File locks ---
+
+func claimFilesTool() mcp.Tool {
+	return mcp.NewTool(
+		"claim_files",
+		mcp.WithDescription("Declare which files you are editing. Broadcasts a steering-priority message to all agents in the project. Other agents should avoid editing these files."),
+		asParam,
+		projectParam,
+		mcp.WithString("file_paths", mcp.Description("JSON array of file paths being claimed (e.g. '[\"src/auth.go\",\"src/db.go\"]')"), mcp.Required()),
+		mcp.WithNumber("ttl_seconds", mcp.Description("How long the claim lasts (default: 1800 = 30min)")),
+	)
+}
+
+func releaseFilesTool() mcp.Tool {
+	return mcp.NewTool(
+		"release_files",
+		mcp.WithDescription("Release previously claimed files. Broadcasts an info-priority message."),
+		asParam,
+		projectParam,
+		mcp.WithString("file_paths", mcp.Description("JSON array of file paths to release (must match a previous claim)"), mcp.Required()),
+	)
+}
+
+func listLocksTool() mcp.Tool {
+	return mcp.NewTool(
+		"list_locks",
+		mcp.WithDescription("List all active file locks in a project. Shows which agent holds which files."),
+		projectParam,
+	)
+}
+
 // --- Agent lifecycle ---
 
 func deactivateAgentTool() mcp.Tool {

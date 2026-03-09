@@ -80,6 +80,9 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiStreamActivity(w, req)
 	case path == "/events/stream" && req.Method == http.MethodGet:
 		r.apiStreamEvents(w, req)
+	// File locks
+	case path == "/file-locks" && req.Method == http.MethodGet:
+		r.apiGetFileLocks(w, req)
 	// Task endpoints
 	case path == "/tasks/all" && req.Method == http.MethodGet:
 		r.apiGetAllTasks(w)
@@ -1547,4 +1550,20 @@ func (r *Relay) apiGetVaultStats(w http.ResponseWriter, req *http.Request) {
 		"doc_count":   count,
 		"total_bytes": totalSize,
 	})
+}
+
+func (r *Relay) apiGetFileLocks(w http.ResponseWriter, req *http.Request) {
+	project := req.URL.Query().Get("project")
+	if project == "" {
+		project = "default"
+	}
+	locks, err := r.DB.ListFileLocks(project)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "failed to list file locks", err)
+		return
+	}
+	if locks == nil {
+		locks = []models.FileLock{}
+	}
+	writeJSON(w, locks)
 }

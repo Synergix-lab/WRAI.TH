@@ -299,6 +299,19 @@ func migrate(conn *sql.DB) error {
 	// Backfill deliveries for existing messages
 	migrateDeliveries(conn)
 
+	// File locks
+	conn.Exec(`CREATE TABLE IF NOT EXISTS file_locks (
+		id          TEXT PRIMARY KEY,
+		agent_name  TEXT NOT NULL,
+		project     TEXT NOT NULL,
+		file_paths  TEXT NOT NULL,
+		claimed_at  TEXT NOT NULL,
+		released_at TEXT,
+		ttl_seconds INTEGER NOT NULL DEFAULT 1800
+	)`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_file_locks_project ON file_locks(project)`)
+	conn.Exec(`CREATE INDEX IF NOT EXISTS idx_file_locks_agent ON file_locks(agent_name, project)`)
+
 	// Profiles
 	conn.Exec(`CREATE TABLE IF NOT EXISTS profiles (
 		id           TEXT PRIMARY KEY,
