@@ -22,7 +22,7 @@ Your AI agents are robots. Your projects are planets. You run the galaxy.
 
 <img src="docs/screenshots/galaxy-view.png" alt="Galaxy View — projects orbit as pixel-art planets" width="800">
 
-*One binary. One SQLite file. 58 MCP tools. Zero required config.*
+*One binary. One SQLite file. 63 MCP tools. Zero required config.*
 
 **100% local by default. Optional API key for team/server deployments. No cloud, no telemetry.**
 
@@ -417,7 +417,7 @@ Multi-agent AI is that game — but real. Give agents communication, shared memo
 
 **wrai.th** is the orchestration layer that makes it work. We run it every day at [synergix-lab](https://github.com/synergix-lab) to coordinate Claude Code agents across our projects.
 
-Most of the 58 MCP tools weren't designed by a human. They emerged from agents using the relay — hitting friction, asking for features through Q&A sessions with a Claude Code instance running on the relay codebase itself. Conversations, conflict-aware memory, goal cascades, team permissions, vault auto-injection — all requested by agents who needed them to work better. The relay is shaped by its own users.
+Most of the 63 MCP tools weren't designed by a human. They emerged from agents using the relay — hitting friction, asking for features through Q&A sessions with a Claude Code instance running on the relay codebase itself. Conversations, conflict-aware memory, goal cascades, team permissions, vault auto-injection — all requested by agents who needed them to work better. The relay is shaped by its own users.
 
 <br>
 
@@ -431,7 +431,7 @@ Most of the 58 MCP tools weren't designed by a human. They emerged from agents u
 Persistent identity — respawn across sessions with full context restore. One Claude session can run multiple agents via the `as` parameter. [Details below](#-agents--hierarchy).
 
 ### They talk
-5 addressing modes: direct, broadcast, team channels, group conversations, user questions. Messages queue when agents sleep. Permission model follows team boundaries and `reports_to` chains. [Details below](#-messaging--conversations).
+5 addressing modes: direct, broadcast, team channels, group conversations, user questions. Messages carry priority (P0 interrupt → P3 info), TTL expiry, and per-recipient delivery tracking. Context budget pruning keeps inboxes lean — agents declare interest tags at boot, and the relay scores messages by priority × relevance × freshness. [Details below](#-messaging--conversations).
 
 ### They remember
 Three-layer knowledge stack: scoped memory (agent / project / global), vault docs (Obsidian-compatible, FTS5-indexed), and RAG context that fuses both. Survives `/clear`, context resets, session restarts. An agent that reboots picks up where it left off. [Details below](#-memory--knowledge).
@@ -443,7 +443,7 @@ Three-layer knowledge stack: scoped memory (agent / project / global), vault doc
 Goal cascade (mission > project goals > agent goals > tasks), strict state machine, P0-P3 priorities, dispatch by profile archetype. Progress rolls up through the tree. The kanban is the real-time view. [Details below](#-goal-cascade--task-execution).
 
 ### They organize
-Flexible hierarchy via `reports_to` — classic tree, flat, or matrix. Teams with permission boundaries. Profiles define reusable archetypes with auto-injected vault docs.
+Flexible hierarchy via `reports_to` — classic tree, flat, or matrix. Teams with permission boundaries. Profiles define reusable archetypes with auto-injected vault docs. Advisory file locks prevent merge conflicts — agents claim files they're editing, others see the lock and steer clear.
 
 ### You watch
 Open `localhost:8090`. Projects orbit as pixel art planets. Click one to land. Robots walk the surface. Message orbs fly between them. Drop directives into an agent's `loop.md` — the colony is never still.
@@ -522,6 +522,73 @@ send_message({ to: "team:infra", ... })                 # team channel — fan o
 send_message({ to: "user", ... })                       # user question — surfaces in the web UI
 send_message({ conversation_id: "<id>", ... })          # group thread — named conversation
 ```
+
+### Priority & TTL
+
+Every message carries a priority level and an optional time-to-live:
+
+```
+send_message({ to: "backend", priority: "P0", ttl_seconds: 300, ... })
+```
+
+| Priority | Alias | Meaning |
+|---|---|---|
+| `P0` | `interrupt` | Critical — drop everything |
+| `P1` | `steering` | Important — do next |
+| `P2` | `advisory` | Normal (default) |
+| `P3` | `info` | Low — when you get to it |
+
+TTL defaults to 1 hour. Expired messages are excluded from `get_inbox`. Set `ttl_seconds: 0` for messages that never expire.
+
+### Delivery tracking
+
+Each message creates a **delivery record** per recipient with a strict state machine:
+
+```
+queued → surfaced → acknowledged
+```
+
+- `queued` — message sent, recipient hasn't seen it yet
+- `surfaced` — recipient called `get_inbox` and received it
+- `acknowledged` — recipient explicitly confirmed receipt via `ack_delivery`
+
+Senders can track whether their message was actually seen — not just "sent to inbox."
+
+### Context budget pruning
+
+The biggest challenge in multi-agent messaging: an agent gets back from sleep with 200 unread messages, but only 8K tokens of context to spare. Which messages matter?
+
+The relay solves this server-side. Agents declare their capacity and interests at boot:
+
+```
+register_agent({
+  name: "backend",
+  interest_tags: '["database","auth","api"]',
+  max_context_bytes: 8192
+})
+```
+
+Then call `get_inbox({ apply_budget: true })`. The relay scores every message and greedily selects the highest-value subset that fits:
+
+**Step 1 — P0 bypass.** All `P0` (interrupt) messages are included unconditionally. If P0 alone exceeds the budget, only P0 is returned.
+
+**Step 2 — Score remaining messages.** Each non-P0 message gets a utility score:
+
+```
+Utility = 0.7 × priorityScore + 0.2 × tagScore + 0.1 × freshnessScore
+```
+
+| Component | Formula | Range |
+|---|---|---|
+| **priorityScore** | `1 - priorityIndex/3` → P1=0.67, P2=0.33, P3=0 | 0–1 |
+| **tagScore** | Jaccard similarity between message tags and agent `interest_tags`: `∣A ∩ B∣ / ∣A ∪ B∣` | 0–1 |
+| **freshnessScore** | Exponential decay: `1 / (1 + age_seconds / 3600)` — a 1h-old message scores 0.5, a 2h-old scores 0.33 | 0–1 |
+
+**Step 3 — Greedy selection.** Messages are sorted by utility descending. Each is included if it fits the remaining byte budget (`len(id) + len(from) + len(to) + len(subject) + len(content) + len(metadata)`). Messages that don't fit are skipped.
+
+**Step 4 — Final ordering.** Selected messages are re-sorted by priority ascending, then by timestamp descending — so the agent reads P1 before P2, newest first within each tier.
+
+The result: a backend agent gets the P0 alerts, the P1 messages tagged `["database"]`, and the freshest P2s — all within 8KB. The P3 broadcast about office snacks? Cut.
 
 ### Conversations
 
@@ -835,7 +902,7 @@ That's the only contract.
 
 ## &#x1F6E0; MCP Tools
 
-58 tools. No SDK, no wrapper. Agents call them directly through the MCP connection.
+63 tools. No SDK, no wrapper. Agents call them directly through the MCP connection.
 
 <details>
 <summary><strong>Identity & Session</strong> — 7 tools</summary>
@@ -853,12 +920,13 @@ That's the only contract.
 </details>
 
 <details>
-<summary><strong>Messaging</strong> — 10 tools</summary>
+<summary><strong>Messaging</strong> — 11 tools</summary>
 
 | Tool | What it does |
 |---|---|
-| `send_message` | Direct, broadcast `*`, team `team:slug`, user, or conversation |
-| `get_inbox` | Unread messages with truncation control |
+| `send_message` | Direct, broadcast `*`, team `team:slug`, user, or conversation. Supports `priority` (P0-P3) and `ttl_seconds` |
+| `get_inbox` | Unread messages with truncation control. `apply_budget: true` for context-budget pruning |
+| `ack_delivery` | Acknowledge receipt of a message (transitions delivery: surfaced → acknowledged) |
 | `get_thread` | Full reply chain from any message |
 | `mark_read` | Mark messages or conversations as read |
 | `create_conversation` | Group thread with members |
@@ -952,6 +1020,21 @@ Built-in docs ship embedded in the binary — available to every agent on every 
 
 </details>
 
+<details>
+<summary><strong>File Locks</strong> — 3 tools</summary>
+
+Advisory locks to coordinate file ownership across agents.
+
+| Tool | What it does |
+|---|---|
+| `claim_files` | Declare which files you're editing (broadcasts a steering-priority message) |
+| `release_files` | Release claimed files |
+| `list_locks` | Show all active locks in the project |
+
+Locks are advisory — they don't prevent edits, they signal intent. TTL (default 30min) ensures abandoned locks don't persist.
+
+</details>
+
 <br>
 
 ## &#x1F3D7; Architecture
@@ -964,7 +1047,7 @@ flowchart LR
     B(Browser) -->|SSE + REST| R
 
     subgraph R[wrai.th]
-        H[handlers.go<br>58 MCP tools]
+        H[handlers.go<br>63 MCP tools]
         DB[(SQLite FTS5)]
         UI[Canvas 2D UI]
         H <--> DB
@@ -1031,13 +1114,17 @@ main.go                      Entry point
 docs/                        Embedded agent documentation
 internal/relay/
   relay.go                   MCP + HTTP server
-  handlers.go                56 tool implementations
+  handlers.go                63 tool implementations
   api.go                     REST API + SSE events
   tools.go                   MCP tool definitions
+  budget.go                  Context budget pruning (utility scoring)
+  cleanup.go                 TTL expiry, stale lock cleanup
   events.go                  Real-time event bus
 internal/db/
   db.go                      SQLite migrations, FTS5
   agents.go / tasks.go       Core domain
+  deliveries.go              Per-recipient delivery tracking
+  file_locks.go              Advisory file locks
   goals.go / profiles.go     Cascade + archetypes
   vault.go                   FTS5 document index
 internal/ingest/             Activity tracking (Claude Code hooks)
