@@ -234,7 +234,7 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		}
 		_ = h.db.CreateDeliveries(msg.ID, project, recipients)
 
-		return resultJSON(msg)
+		return resultJSON(compactSendConfirmation(*msg))
 	}
 
 	// Broadcast permission: when teams exist, only admin team members can broadcast
@@ -266,7 +266,7 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		h.registry.Notify(project, to, from, subject, msg.ID)
 	}
 
-	return resultJSON(msg)
+	return resultJSON(compactSendConfirmation(*msg))
 }
 
 func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -390,22 +390,20 @@ func (h *Handlers) HandleListAgents(ctx context.Context, req mcp.CallToolRequest
 		sessionByID[s.SessionID] = s
 	}
 
-	type agentWithActivity struct {
-		models.Agent
-		Activity     string `json:"activity,omitempty"`
-		ActivityTool string `json:"activity_tool,omitempty"`
-	}
-
-	result := make([]agentWithActivity, 0, len(agents))
+	result := make([]map[string]any, 0, len(agents))
 	for _, a := range agents {
-		aa := agentWithActivity{Agent: a}
+		ca := compactAgent(a)
 		if a.SessionID != nil {
 			if s, ok := sessionByID[*a.SessionID]; ok {
-				aa.Activity = string(s.Activity)
-				aa.ActivityTool = s.Tool
+				if s.Activity != "" {
+					ca["activity"] = string(s.Activity)
+				}
+				if s.Tool != "" {
+					ca["activity_tool"] = s.Tool
+				}
 			}
 		}
-		result = append(result, aa)
+		result = append(result, ca)
 	}
 
 	return resultJSON(map[string]any{
@@ -1138,7 +1136,7 @@ func (h *Handlers) HandleClaimTask(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to claim task: %v", err)), nil
 	}
 	h.events.Emit(MCPEvent{Type: "task", Action: "claim", Agent: agent, Project: project, Label: task.Title})
-	return resultJSON(task)
+	return resultJSON(compactTaskConfirmation(*task))
 }
 
 func (h *Handlers) HandleStartTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1154,7 +1152,7 @@ func (h *Handlers) HandleStartTask(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to start task: %v", err)), nil
 	}
 	h.events.Emit(MCPEvent{Type: "task", Action: "start", Agent: agent, Project: project, Label: task.Title})
-	return resultJSON(task)
+	return resultJSON(compactTaskConfirmation(*task))
 }
 
 func (h *Handlers) HandleCompleteTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1200,7 +1198,7 @@ func (h *Handlers) HandleCompleteTask(ctx context.Context, req mcp.CallToolReque
 		}
 	}
 
-	return resultJSON(task)
+	return resultJSON(compactTaskConfirmation(*task))
 }
 
 func (h *Handlers) HandleBlockTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1235,7 +1233,7 @@ func (h *Handlers) HandleBlockTask(ctx context.Context, req mcp.CallToolRequest)
 		}
 	}
 
-	return resultJSON(task)
+	return resultJSON(compactTaskConfirmation(*task))
 }
 
 func (h *Handlers) HandleCancelTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1277,7 +1275,7 @@ func (h *Handlers) HandleCancelTask(ctx context.Context, req mcp.CallToolRequest
 		}
 	}
 
-	return resultJSON(task)
+	return resultJSON(compactTaskConfirmation(*task))
 }
 
 func (h *Handlers) HandleArchiveTasks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1359,20 +1357,14 @@ func (h *Handlers) HandleListTasks(ctx context.Context, req mcp.CallToolRequest)
 		tasks = []models.Task{}
 	}
 
-	// Truncate descriptions to save tokens in list view (use get_task for full details)
-	for i := range tasks {
-		if len(tasks[i].Description) > 200 {
-			tasks[i].Description = tasks[i].Description[:200] + "…"
-		}
-		if tasks[i].Result != nil && len(*tasks[i].Result) > 200 {
-			truncated := (*tasks[i].Result)[:200] + "…"
-			tasks[i].Result = &truncated
-		}
+	compact := make([]map[string]any, len(tasks))
+	for i, t := range tasks {
+		compact[i] = compactListTask(t)
 	}
 
 	return resultJSON(map[string]any{
-		"count": len(tasks),
-		"tasks": tasks,
+		"count": len(compact),
+		"tasks": compact,
 	})
 }
 
@@ -1949,6 +1941,108 @@ func (h *Handlers) HandleGetGoalCascade(ctx context.Context, req mcp.CallToolReq
 }
 
 // --- Session context ---
+
+// compactTaskConfirmation returns minimal task info for state-transition confirmations.
+func compactTaskConfirmation(t models.Task) map[string]any {
+	ct := map[string]any{
+		"id":     t.ID,
+		"title":  t.Title,
+		"status": t.Status,
+	}
+	if t.AssignedTo != nil {
+		ct["assigned_to"] = *t.AssignedTo
+	}
+	if t.BlockedReason != nil {
+		ct["blocked_reason"] = *t.BlockedReason
+	}
+	return ct
+}
+
+// compactSendConfirmation returns minimal message info after send.
+func compactSendConfirmation(m models.Message) map[string]any {
+	cm := map[string]any{
+		"id":      m.ID,
+		"to":      m.To,
+		"subject": m.Subject,
+		"status":  "sent",
+	}
+	if m.ConversationID != nil {
+		cm["conversation_id"] = *m.ConversationID
+	}
+	if m.DeliveryID != nil {
+		cm["delivery_id"] = *m.DeliveryID
+	}
+	return cm
+}
+
+// compactAgent returns a pruned agent for list views.
+func compactAgent(a models.Agent) map[string]any {
+	ca := map[string]any{
+		"name":   a.Name,
+		"status": a.Status,
+	}
+	if a.Role != "" {
+		ca["role"] = a.Role
+	}
+	if a.ReportsTo != nil {
+		ca["reports_to"] = *a.ReportsTo
+	}
+	if a.ProfileSlug != nil {
+		ca["profile_slug"] = *a.ProfileSlug
+	}
+	if a.IsExecutive {
+		ca["is_executive"] = true
+	}
+	return ca
+}
+
+// compactListTask returns a pruned task for list views (more fields than session context compact).
+func compactListTask(t models.Task) map[string]any {
+	ct := map[string]any{
+		"id":     t.ID,
+		"title":  t.Title,
+		"status": t.Status,
+	}
+	if t.Priority != "" && t.Priority != "normal" {
+		ct["priority"] = t.Priority
+	}
+	if t.AssignedTo != nil {
+		ct["assigned_to"] = *t.AssignedTo
+	}
+	if t.DispatchedBy != "" {
+		ct["dispatched_by"] = t.DispatchedBy
+	}
+	if t.ProfileSlug != "" {
+		ct["profile"] = t.ProfileSlug
+	}
+	if t.Description != "" {
+		d := t.Description
+		if len(d) > 200 {
+			d = d[:200] + "…"
+		}
+		ct["description"] = d
+	}
+	if t.Result != nil {
+		r := *t.Result
+		if len(r) > 200 {
+			r = r[:200] + "…"
+		}
+		ct["result"] = r
+	}
+	if t.BlockedReason != nil {
+		ct["blocked_reason"] = *t.BlockedReason
+	}
+	if t.GoalID != nil {
+		ct["goal_id"] = *t.GoalID
+	}
+	if t.ParentTaskID != nil {
+		ct["parent_task_id"] = *t.ParentTaskID
+	}
+	if t.BoardID != nil {
+		ct["board_id"] = *t.BoardID
+	}
+	return ct
+}
 
 // compactTask returns a pruned task for session context (strips timestamps, project, profile_slug).
 func compactTask(t models.Task) map[string]any {
