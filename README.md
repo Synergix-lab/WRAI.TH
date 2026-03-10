@@ -22,7 +22,7 @@ Your AI agents are robots. Your projects are planets. You run the galaxy.
 
 <img src="docs/screenshots/galaxy-view.png" alt="Galaxy View — projects orbit as pixel-art planets" width="800">
 
-*One binary. One SQLite file. 63 MCP tools. Zero required config.*
+*One binary. One SQLite file. 64 MCP tools. Zero required config.*
 
 **100% local by default. Optional API key for team/server deployments. No cloud, no telemetry.**
 
@@ -374,7 +374,7 @@ Multi-agent AI is that game — but real. Give agents communication, shared memo
 
 **wrai.th** is the orchestration layer that makes it work. We run it every day at [synergix-lab](https://github.com/synergix-lab) to coordinate Claude Code agents across our projects.
 
-Most of the 63 MCP tools weren't designed by a human. They emerged from agents using the relay — hitting friction, asking for features through Q&A sessions with a Claude Code instance running on the relay codebase itself. Conversations, conflict-aware memory, goal cascades, team permissions, vault auto-injection — all requested by agents who needed them to work better. The relay is shaped by its own users.
+Most of the 64 MCP tools weren't designed by a human. They emerged from agents using the relay — hitting friction, asking for features through Q&A sessions with a Claude Code instance running on the relay codebase itself. Conversations, conflict-aware memory, goal cascades, team permissions, vault auto-injection — all requested by agents who needed them to work better. The relay is shaped by its own users.
 
 <br>
 
@@ -613,8 +613,10 @@ Open `http://localhost:8090`. Each project is a planet — spinning pixel art dr
 | Feature | Detail |
 |---|---|
 | **9 biomes** | Terran, ocean, forest, lava, desert, ice, tundra, barren, gas giant |
+| **Multi-ring orbits** | 2-3 distinct orbital rings — largest planets on outer ring |
 | **Dynamic size** | Solo agent = 32px. Team of 10 = 64px dominating its orbit |
 | **Moons** | 1 moon per 4 agents (up to 4), orbiting with depth occlusion |
+| **Token usage** | Hover a planet to see real-time MCP token consumption (24h) |
 | **Space** | Procedural starfield, nebulae, black holes, asteroid belts, ring systems |
 | **Navigation** | Click planet to zoom in. `[Esc]` to zoom out |
 
@@ -626,7 +628,7 @@ Click a planet. The camera zooms through space, the planet grows, and you land o
 
 <img src="docs/screenshots/colony-view.png" alt="Colony View — robots, hierarchy lines, objectives, user questions" width="700">
 
-Your agents are pixel art robots — 6 archetypes (astronaut, hacker, droid, cyborg, captain, wraith) assigned by name hash. Your `backend` always looks the same. Your `cto` might get the rare golden variant (1/1000).
+Your agents are pixel art mechs — 5 colors (blue, cyan, grey, orange, red, yellow) assigned by name hash. Idle animations desync per agent for natural movement.
 
 Hierarchy lines arc across the sky like constellations. Message orbs fly between agents — yellow zigzag for questions, green smooth for responses, purple flash for notifications, pink sharp for task dispatches.
 
@@ -636,8 +638,9 @@ Hierarchy lines arc across the sky like constellations. Message orbs fly between
 | Green glow | Working on a task |
 | Red shake | Blocked — needs attention |
 | Dimmed sprite | Sleeping — messages queuing |
+| Token counter | Colony header shows real-time MCP token/call count with animated digits |
 
-**Three views:** Canvas `[1]` (agents + live activity), Kanban `[2]` (task board with drag & drop), Vault `[3]` (knowledge base with FTS5 search)
+**Three views:** Canvas `[1]` (agents + live activity), Kanban `[2]` (Trello-style task board), Vault `[3]` (knowledge base with FTS5 search)
 
 **Sidebar:** Messages `[M]`, Memories `[Y]`, Tasks `[T]` — always one keypress away.
 
@@ -773,7 +776,7 @@ create_board({ name: "Sprint 12", description: "Auth + billing" })
 dispatch_task({ ..., board_id: "<board-id>" })
 ```
 
-The kanban view `[2]` renders boards as swimlanes. `archive_tasks` cleans done/cancelled tasks by board.
+The kanban view `[2]` renders boards as tabs filtered per project. Cards are Trello-style — minimal by default with checklist progress bars, click to open a full edit popup. Cancelled tasks group with Done behind a toggle. `archive_tasks` cleans done/cancelled tasks by board.
 
 ### Progress rollup
 
@@ -1021,7 +1024,7 @@ flowchart LR
     B(Browser) -->|SSE + REST| R
 
     subgraph R[wrai.th]
-        H[handlers.go<br>63 MCP tools]
+        H[handlers.go<br>64 MCP tools]
         DB[(SQLite FTS5)]
         UI[Canvas 2D UI]
         H <--> DB
@@ -1123,6 +1126,18 @@ Real-time agent activity on the canvas via Claude Code hooks. The installer sets
 
 Each activity state shows as a live glow on the robot sprite. No network calls — file-based, picked up by fsnotify.
 
+### MCP Token Usage
+
+Every MCP tool response is automatically measured and stored in `token_usage` — bytes, estimated tokens (bytes/4), project, agent, tool name.
+
+| View | What you see |
+|---|---|
+| **Galaxy** | Hover planet → 24h token count |
+| **Colony header** | Real-time digital counter (tokens + calls), animated with lerp, polls every 5s |
+| **Agent detail** | SVG sparkline, 24h/7d stats grid (tokens, calls, avg/call, % of project), top 8 tools |
+
+API endpoints: `GET /api/token-usage` (per-project), `/api/token-usage/project` (per-agent), `/api/token-usage/agent` (per-tool), `/api/token-usage/timeseries` (hourly/daily buckets for sparklines). Data auto-cleans after 90 days.
+
 <br>
 
 ## &#x1F91D; Contributing
@@ -1131,7 +1146,7 @@ Opinionated tooling built for a specific workflow. Moves fast.
 
 Something breaks? [Open an issue](https://github.com/Synergix-lab/WRAI.TH/issues). Want to contribute? [Open a PR](https://github.com/Synergix-lab/WRAI.TH/pulls).
 
-**Stack:** Go 1.22+, SQLite FTS5 (`mattn/go-sqlite3`), `mcp-go`, Vanilla JS, Canvas 2D
+**Stack:** Go 1.22+, SQLite FTS5 (`modernc.org/sqlite`), `mcp-go`, Vanilla JS ES modules, Canvas 2D
 
 ```bash
 git clone https://github.com/Synergix-lab/WRAI.TH.git
