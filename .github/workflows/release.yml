@@ -96,10 +96,16 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
 
+          # Create release if it doesn't exist, then upload assets
           gh release create "$VERSION" \
             --title "$VERSION" \
             --generate-notes \
+            --latest \
+            2>/dev/null || true
+
+          gh release upload "$VERSION" \
             artifacts/agent-relay-*.tar.gz \
             artifacts/agent-relay-*.zip \
             install.sh \
-            install.ps1
+            install.ps1 \
+            --clobber
