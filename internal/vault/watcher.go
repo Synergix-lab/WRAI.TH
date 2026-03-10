@@ -142,7 +142,9 @@ func (w *Watcher) indexAll(cfg models.VaultConfig) int {
 			return nil
 		}
 
-		if w.indexFile(cfg, path) == nil {
+		if err := w.indexFile(cfg, path); err != nil {
+			log.Printf("[vault] indexFile error for %s: %v", rel, err)
+		} else {
 			count++
 		}
 		return nil
