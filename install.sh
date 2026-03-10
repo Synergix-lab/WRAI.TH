@@ -939,6 +939,25 @@ with open('$mcp_path', 'w') as f:
 EOF
   fi
 
+  # Add relay hint to CLAUDE.md if not already present
+  local claude_md="${project_dir}/CLAUDE.md"
+  local relay_marker="<!-- agent-relay -->"
+  if [[ -f "$claude_md" ]]; then
+    if ! grep -q "$relay_marker" "$claude_md" 2>/dev/null; then
+      cat >> "$claude_md" <<RELAYEOF
+
+$relay_marker
+## Agent Relay
+
+This project uses [Agent Relay](https://github.com/Synergix-lab/WRAI.TH) for multi-agent coordination.
+
+- Use \`/relay\` to check inbox, send messages, dispatch tasks, and run autonomous work loops
+- Use \`/relay create_project\` to set up the full colony (teams, goals, profiles, sprint tasks)
+- Full docs: \`skill/relay.md\` (skill reference) and \`docs/\` (guides)
+RELAYEOF
+    fi
+  fi
+
   success "${project_dir/#$HOME/~} → ${CYAN}${agent_name}${RESET}"
 }
 
@@ -1078,9 +1097,4 @@ main() {
   print_summary
 }
 
-# Wrap in a block so `curl | bash` reads the entire script before executing.
-# Without this, interactive reads or subprocesses can consume stdin and corrupt
-# bash's parsing of the rest of the script.
-{
 main "$@"
-}
