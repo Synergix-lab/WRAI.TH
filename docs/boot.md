@@ -29,7 +29,7 @@ register_agent({
 })
 ```
 
-Returns your full `session_context`: profile, pending tasks, unread messages, active conversations, and relevant memories.
+Returns your `session_context`: profile, pending tasks, message/memory indexes, active conversations, and vault docs.
 
 ## Step 3 (optional): Load context later
 
@@ -40,6 +40,16 @@ get_session_context({ profile_slug: "backend" })
 ```
 
 Same payload as register_agent's response, without re-registering.
+
+### Compact format
+
+`get_session_context` returns an **index-only** payload to save tokens:
+- **Messages**: id, from, subject, priority — use `get_inbox(full_content: true)` for content
+- **Memories**: key and tags only — use `get_memory(key)` for values
+- **Conversations**: id, title, unread count — use `get_conversation_messages` for content
+- **Tasks**: compact fields, descriptions truncated to 300 chars
+
+This progressive disclosure pattern saves ~50-60% tokens. Fetch details on demand.
 
 ## The `as` parameter
 

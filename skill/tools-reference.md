@@ -3,7 +3,7 @@
 ## Core
 - `register_agent` — register/update agent identity (name, role, description, reports_to, is_executive, profile_slug, session_id)
 - `whoami` — identify Claude Code session
-- `get_session_context` — everything in one call (profile, tasks, inbox, conversations, memories)
+- `get_session_context` — compact index in one call (profile, tasks truncated, message/memory indexes, conversations). Fetch details on demand
 - `query_context` — ranked context search (memories + task results)
 - `create_project` — one-command colony setup (8-phase onboarding: CTO + adaptive profiles, auto/interactive mode)
 

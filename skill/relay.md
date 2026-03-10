@@ -79,7 +79,7 @@ Goal cascade: Mission → Project Goal → Agent Goal → Task. Agents see the f
 Memory layers: `constraints` (hard rules) > `behavior` (defaults) > `context` (ephemeral).
 
 ### Context
-- **`context`**: `get_session_context` — profile, tasks, inbox, conversations, memories in one call
+- **`context`**: `get_session_context` — compact index: tasks (truncated), message/memory indexes, conversations (id+title+unread). Use `get_inbox`, `get_memory`, `get_conversation_messages` for full content
 - **`query <text>`**: Ranked context search (memories + task results)
 - **`inbox --budget`**: `get_inbox(apply_budget: true)` — context budget pruning scores messages by `0.7×priority + 0.2×tagRelevance + 0.1×freshness`, selects best subset within byte limit. P0 always bypasses
 
