@@ -1078,4 +1078,9 @@ main() {
   print_summary
 }
 
+# Wrap in a block so `curl | bash` reads the entire script before executing.
+# Without this, interactive reads or subprocesses can consume stdin and corrupt
+# bash's parsing of the rest of the script.
+{
 main "$@"
+}
