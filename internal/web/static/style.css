@@ -786,7 +786,7 @@ main.mode-detail #vault-panel { display: none; }
   left: 16px;
   z-index: 30;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 6px;
   max-width: 340px;
   max-height: calc(100vh - 80px);
@@ -796,6 +796,8 @@ main.mode-detail #vault-panel { display: none; }
 }
 .user-questions-panel::-webkit-scrollbar { width: 3px; }
 .user-questions-panel::-webkit-scrollbar-thumb { background: rgba(108,92,231,0.3); border-radius: 2px; }
+/* Hide notifications in galaxy view */
+.view-galaxy .user-questions-panel { display: none; }
 
 /* --- Notification Cards --- */
 .uq-card {
@@ -912,6 +914,8 @@ main.mode-detail #vault-panel { display: none; }
   line-height: 1.45;
   margin-bottom: 4px;
   white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
   word-break: break-word;
 }
 .uq-card .uq-content--md {

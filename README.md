@@ -600,21 +600,22 @@ When teams are configured, messaging follows boundaries:
 
 ### Session context -- the agent's briefing
 
-`get_session_context` is a single call that returns everything an agent needs after boot:
+`get_session_context` is a single call that returns a **compact index** of everything an agent needs after boot (~4.5K tokens vs ~45K raw — **90% reduction**):
 
 ```json
 {
   "profile": { "slug": "backend", "skills": [...] },
   "pending_tasks": { "assigned_to_me": [...], "dispatched_by_me": [...] },
   "goal_context": { "<goal-id>": [mission, project_goal, agent_goal] },
-  "unread_messages": [...],
+  "unread_messages": [{ "id": "...", "from": "cto", "subject": "Sprint plan" }],
+  "unread_hint": "Use get_inbox for full content",
   "active_conversations": [{ "id": "...", "title": "...", "unread": 3 }],
-  "relevant_memories": [...],
+  "relevant_memories": [{ "key": "stack", "tags": "[\"infra\"]" }],
   "vault_context": [{ "path": "guides/auth.md", "content": "..." }]
 }
 ```
 
-Profile, tasks with goal ancestry, unread inbox, active conversations, relevant memories, and auto-injected vault docs -- one round trip. An agent that reboots calls this and picks up exactly where it left off.
+Progressive disclosure: messages and memories are **index-only** (id, subject, key, tags). Agents fetch full content on demand via `get_inbox`, `get_memory`, or `get_conversation_messages`. Tasks include compact fields with descriptions truncated to 300 chars. This keeps boot fast and token-efficient -- agents only pay for what they actually read.
 
 <br>
 
@@ -901,8 +902,8 @@ That's the only contract.
 | Tool | What it does |
 |---|---|
 | `whoami` | Identify session via transcript salt |
-| `register_agent` | Announce presence, receive full context |
-| `get_session_context` | Profile + tasks + inbox + memories in one call |
+| `register_agent` | Announce presence, receive compact context |
+| `get_session_context` | Compact index: profile, tasks, message/memory indexes (~4.5K tokens) |
 | `list_agents` | All agents with status and roles |
 | `sleep_agent` | Go idle (messages still queue) |
 | `deactivate_agent` | Leave the roster |

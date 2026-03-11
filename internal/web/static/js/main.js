@@ -980,7 +980,7 @@ function showUserCard(msg) {
     });
   }
 
-  userQuestionsPanel.appendChild(card);
+  userQuestionsPanel.prepend(card);
 }
 
 function _navigateToProject(project, mode, taskId) {
@@ -1107,7 +1107,7 @@ function showUserTaskCard(task) {
     }
   });
 
-  userQuestionsPanel.appendChild(card);
+  userQuestionsPanel.prepend(card);
 }
 
 // --- Agent detail panel ---

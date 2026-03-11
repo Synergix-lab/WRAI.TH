@@ -195,8 +195,11 @@ func TestSendAndGetInbox(t *testing.T) {
 		"content": "hello bot-b",
 	}))
 	msg := parseJSON(t, sendRes)
-	if msg["from"] != "bot-a" {
-		t.Errorf("expected from=bot-a, got %v", msg["from"])
+	if msg["to"] != "bot-b" {
+		t.Errorf("expected to=bot-b, got %v", msg["to"])
+	}
+	if msg["id"] == nil {
+		t.Errorf("expected message id in response")
 	}
 
 	// Check inbox
