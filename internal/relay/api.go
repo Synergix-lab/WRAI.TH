@@ -19,7 +19,8 @@ import (
 // apiError logs the full error server-side and returns a safe message to the client.
 func apiError(w http.ResponseWriter, status int, msg string, err error) {
 	log.Printf("API error: %s: %v", msg, err)
-	http.Error(w, fmt.Sprintf(`{"error":"%s"}`, msg), status)
+	b, _ := json.Marshal(map[string]string{"error": msg})
+	http.Error(w, string(b), status)
 }
 
 // ServeAPI handles REST API requests for the web UI.

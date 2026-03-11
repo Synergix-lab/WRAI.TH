@@ -233,7 +233,7 @@ func (d *DB) getSubtasks(parentID, project string, depth, maxDepth int) ([]model
 func (d *DB) GetAgentTasks(project, agentName string) (assignedToMe []models.Task, dispatchedByMe []models.Task, err error) {
 	// Assigned to me (active tasks) — close rows before next query
 	assignedToMe, err = d.queryTasks(
-		"SELECT "+taskColumns+" FROM tasks WHERE assigned_to = ? AND project = ? AND status IN ('pending','accepted','in-progress') ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 END",
+		"SELECT "+taskColumns+" FROM tasks WHERE assigned_to = ? AND project = ? AND archived_at IS NULL AND status IN ('pending','accepted','in-progress') ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 END",
 		agentName, project,
 	)
 	if err != nil {
@@ -242,7 +242,7 @@ func (d *DB) GetAgentTasks(project, agentName string) (assignedToMe []models.Tas
 
 	// Also get pending tasks for my profile
 	pending, err := d.queryTasks(
-		`SELECT `+taskColumns+` FROM tasks WHERE project = ? AND status = 'pending' AND assigned_to IS NULL
+		`SELECT `+taskColumns+` FROM tasks WHERE project = ? AND archived_at IS NULL AND status = 'pending' AND assigned_to IS NULL
 		 AND profile_slug IN (SELECT profile_slug FROM agents WHERE name = ? AND project = ? AND profile_slug IS NOT NULL)
 		 ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 END`,
 		project, agentName, project,
@@ -253,7 +253,7 @@ func (d *DB) GetAgentTasks(project, agentName string) (assignedToMe []models.Tas
 
 	// Dispatched by me (not done)
 	dispatchedByMe, err = d.queryTasks(
-		"SELECT "+taskColumns+" FROM tasks WHERE dispatched_by = ? AND project = ? AND status != 'done' ORDER BY dispatched_at DESC",
+		"SELECT "+taskColumns+" FROM tasks WHERE dispatched_by = ? AND project = ? AND archived_at IS NULL AND status != 'done' ORDER BY dispatched_at DESC",
 		agentName, project,
 	)
 	if err != nil {
@@ -285,7 +285,7 @@ func (d *DB) queryTasks(query string, args ...any) ([]models.Task, error) {
 func (d *DB) GetUnackedTasks(minAge time.Duration) ([]models.Task, error) {
 	cutoff := time.Now().UTC().Add(-minAge).Format(memoryTimeFmt)
 	rows, err := d.ro().Query(
-		"SELECT "+taskColumns+" FROM tasks WHERE status = 'pending' AND dispatched_at < ?",
+		"SELECT "+taskColumns+" FROM tasks WHERE status = 'pending' AND archived_at IS NULL AND dispatched_at < ?",
 		cutoff,
 	)
 	if err != nil {

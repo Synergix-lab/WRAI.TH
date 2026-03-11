@@ -1791,7 +1791,7 @@ export class KanbanBoard {
         <label>Board (optional)</label>
         <select name="board_id">
           <option value="">— Default —</option>
-          ${this.boards.map(b => `<option value="${esc(b.id)}"${task.board_id === b.id ? ' selected' : ''}>${esc(b.title)}</option>`).join('')}
+          ${this.boards.map(b => `<option value="${esc(b.id)}"${task.board_id === b.id ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}
         </select>
       </div>
       <div class="kb-field kb-field--meta">
@@ -1827,11 +1827,13 @@ export class KanbanBoard {
       const status = form.querySelector('[name="status"]').value;
       const goalId = form.querySelector('[name="goal_id"]').value;
       const boardId = form.querySelector('[name="board_id"]').value;
+      const assignedTo = form.querySelector('[name="assigned_to"]').value.trim();
       if (!title) return;
       const data = { title, description, priority };
       if (status) data.status = status;
       if (goalId) data.goal_id = goalId;
       if (boardId) data.board_id = boardId;
+      if (assignedTo) data.assigned_to = assignedTo;
       if (this.onEdit) this.onEdit(task.id, task.project || 'default', data);
       this._closeDispatchForm();
     });
