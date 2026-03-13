@@ -14,6 +14,7 @@ import (
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/models"
+	"agent-relay/internal/spawn"
 	"agent-relay/internal/vault"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -26,6 +27,7 @@ type Handlers struct {
 	vaultWatcher *vault.Watcher
 	events       *EventBus
 	tokenCh      chan db.TokenRecord
+	spawnMgr     *spawn.Manager
 }
 
 func NewHandlers(database *db.DB, registry *SessionRegistry, ingester *ingest.Ingester, vaultWatcher *vault.Watcher, events *EventBus) *Handlers {
@@ -229,6 +231,11 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 	priority := mapPriority(req.GetString("priority", "P2"))
 	ttlSeconds := req.GetInt("ttl_seconds", 14400)
 
+	// Quota check: messages
+	if qErr := h.db.CheckQuotaError(project, from, "messages"); qErr != "" {
+		return mcp.NewToolResultError(qErr), nil
+	}
+
 	// Support "to": "conversation:<id>" shorthand
 	if conversationID == nil && strings.HasPrefix(to, "conversation:") {
 		cid := strings.TrimPrefix(to, "conversation:")
@@ -323,6 +330,15 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		h.registry.NotifyBroadcast(project, from, subject, msg.ID)
 	} else {
 		h.registry.Notify(project, to, from, subject, msg.ID)
+	}
+
+	// Fire triggers for high-priority messages (P0/P1)
+	if priority == "P0" || priority == "P1" {
+		msgMeta := map[string]string{"priority": priority, "from": from, "to": to, "subject": subject, "message_id": msg.ID}
+		go h.fireTriggers(project, "message_received", msgMeta)
+		if priority == "P0" {
+			go h.fireTriggers(project, "signal:interrupt", msgMeta)
+		}
 	}
 
 	return h.resultJSONTracked(project, from, "send_message", msg)
@@ -1074,8 +1090,18 @@ func (h *Handlers) HandleRegisterProfile(ctx context.Context, req mcp.CallToolRe
 	soulKeys := normalizeJSONArrayParam(req, "soul_keys")
 	skills := normalizeJSONArrayParam(req, "skills")
 	vaultPaths := normalizeJSONArrayParam(req, "vault_paths")
+	allowedTools := normalizeJSONArrayParam(req, "allowed_tools")
+	poolSize := req.GetInt("pool_size", 0)
 
-	profile, err := h.db.RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths)
+	var opts []db.ProfileOption
+	if allowedTools != "" && allowedTools != "[]" {
+		opts = append(opts, db.WithAllowedTools(allowedTools))
+	}
+	if poolSize > 0 {
+		opts = append(opts, db.WithPoolSize(poolSize))
+	}
+
+	profile, err := h.db.RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths, opts...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to register profile: %v", err)), nil
 	}
@@ -1122,8 +1148,21 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 	project := resolveProject(ctx, req)
 	agent := resolveAgent(ctx, req)
 	profile := req.GetString("profile", "")
+	requiredSkill := req.GetString("required_skill", "")
+	// Quota check: tasks
+	if qErr := h.db.CheckQuotaError(project, agent, "tasks"); qErr != "" {
+		return mcp.NewToolResultError(qErr), nil
+	}
+
+	// Auto-resolve profile from skill if not specified
+	if profile == "" && requiredSkill != "" {
+		best, _ := h.db.FindBestProfileForSkill(project, requiredSkill)
+		if best != nil {
+			profile = best.Slug
+		}
+	}
 	if profile == "" {
-		return mcp.NewToolResultError("profile is required"), nil
+		return mcp.NewToolResultError("profile is required (or provide required_skill)"), nil
 	}
 	title := req.GetString("title", "")
 	if title == "" {
@@ -1210,6 +1249,11 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "dispatch", Agent: agent, Project: project, Target: profile, Label: title})
 
+	// Fire triggers for task_pending
+	go h.fireTriggers(project, "task_pending", map[string]string{
+		"profile": profile, "priority": priority, "task_id": task.ID, "dispatched_by": agent, "title": title,
+	})
+
 	resp := map[string]any{"task": task}
 	if autoBoard != nil {
 		resp["auto_board"] = autoBoard
@@ -1295,6 +1339,11 @@ func (h *Handlers) HandleCompleteTask(ctx context.Context, req mcp.CallToolReque
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "complete", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
 
+	// Fire triggers for task_completed
+	go h.fireTriggers(project, "task_completed", map[string]string{
+		"task_id": task.ID, "profile": task.ProfileSlug, "completed_by": agent, "title": task.Title,
+	})
+
 	// Notify dispatcher
 	h.registry.Notify(project, task.DispatchedBy, agent, fmt.Sprintf("Task done: %s", task.Title), task.ID)
 
@@ -1344,6 +1393,16 @@ func (h *Handlers) HandleBlockTask(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "block", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
+
+	// Fire triggers for task_blocked + signal:alert
+	blockMeta := map[string]string{
+		"task_id": task.ID, "profile": task.ProfileSlug, "blocked_by": agent, "title": task.Title,
+	}
+	if reason != nil {
+		blockMeta["reason"] = *reason
+	}
+	go h.fireTriggers(project, "task_blocked", blockMeta)
+	go h.fireTriggers(project, "signal:alert", blockMeta)
 
 	// Notify dispatcher — blocked is critical
 	reasonStr := ""
@@ -2126,11 +2185,24 @@ func (h *Handlers) HandleSleepAgent(ctx context.Context, req mcp.CallToolRequest
 func (h *Handlers) HandleFindProfiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	project := resolveProject(ctx, req)
 	tag := req.GetString("skill_tag", "")
-	if tag == "" {
-		return mcp.NewToolResultError("skill_tag is required"), nil
+	skillName := req.GetString("skill_name", "")
+
+	if tag == "" && skillName == "" {
+		return mcp.NewToolResultError("skill_tag or skill_name is required"), nil
 	}
 
-	profiles, err := h.db.FindProfilesBySkillTag(project, tag)
+	var profiles []models.Profile
+	var err error
+	searchKey := tag
+
+	// Prefer structured skill_name (JOIN) over LIKE-based skill_tag
+	if skillName != "" {
+		profiles, err = h.db.FindProfilesBySkill(project, skillName)
+		searchKey = skillName
+	} else {
+		profiles, err = h.db.FindProfilesBySkillTag(project, tag)
+	}
+
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to find profiles: %v", err)), nil
 	}
@@ -2139,9 +2211,9 @@ func (h *Handlers) HandleFindProfiles(ctx context.Context, req mcp.CallToolReque
 	}
 
 	return h.resultJSONTracked(project, "", "find_profiles", map[string]any{
-		"skill_tag": tag,
-		"count":     len(profiles),
-		"profiles":  profiles,
+		"skill":    searchKey,
+		"count":    len(profiles),
+		"profiles": profiles,
 	})
 }
 

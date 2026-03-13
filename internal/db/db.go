@@ -341,8 +341,10 @@ func migrate(conn *sql.DB) error {
 	)`)
 	_, _ = conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_project_slug ON profiles(project, slug)`)
 	ensureColumns(conn, "profiles", map[string]string{
-		"skills":      "TEXT NOT NULL DEFAULT '[]'",
-		"vault_paths": "TEXT NOT NULL DEFAULT '[]'",
+		"skills":        "TEXT NOT NULL DEFAULT '[]'",
+		"vault_paths":   "TEXT NOT NULL DEFAULT '[]'",
+		"allowed_tools": "TEXT NOT NULL DEFAULT '[]'",
+		"pool_size":     "INTEGER NOT NULL DEFAULT 3",
 	})
 
 	// Tasks
@@ -485,6 +487,165 @@ func migrate(conn *sql.DB) error {
 	)`)
 	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_token_usage_project_time ON token_usage(project, created_at)`)
 	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_token_usage_agent_time ON token_usage(project, agent, created_at)`)
+
+	// Spawn children tracking
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS spawn_children (
+		id          TEXT PRIMARY KEY,
+		parent_agent TEXT NOT NULL,
+		project     TEXT NOT NULL,
+		profile     TEXT NOT NULL,
+		pid         INTEGER,
+		status      TEXT NOT NULL DEFAULT 'running',
+		prompt      TEXT NOT NULL DEFAULT '',
+		started_at  TEXT NOT NULL,
+		finished_at TEXT,
+		exit_code   INTEGER,
+		error       TEXT DEFAULT ''
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_spawn_children_parent ON spawn_children(parent_agent, project)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_spawn_children_status ON spawn_children(status)`)
+
+	// Schedules (cron jobs stored in DB)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS schedules (
+		id          TEXT PRIMARY KEY,
+		agent_name  TEXT NOT NULL,
+		project     TEXT NOT NULL,
+		name        TEXT NOT NULL,
+		cron_expr   TEXT NOT NULL,
+		prompt      TEXT NOT NULL DEFAULT '',
+		ttl         TEXT NOT NULL DEFAULT '10m',
+		enabled     INTEGER NOT NULL DEFAULT 1,
+		created_at  TEXT NOT NULL,
+		updated_at  TEXT NOT NULL
+	)`)
+	_, _ = conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_agent_name ON schedules(project, agent_name, name)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(project)`)
+	ensureColumns(conn, "schedules", map[string]string{
+		"allowed_tools": "TEXT NOT NULL DEFAULT ''",
+		"cycle":         "TEXT NOT NULL DEFAULT ''",
+	})
+
+	// Cycle history (execution metrics)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS cycle_history (
+		id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+		agent_name            TEXT NOT NULL,
+		project               TEXT NOT NULL,
+		cycle_name            TEXT NOT NULL,
+		duration_ms           INTEGER NOT NULL,
+		success               INTEGER NOT NULL,
+		exit_code             INTEGER NOT NULL DEFAULT 0,
+		error                 TEXT DEFAULT '',
+		input_tokens          INTEGER NOT NULL DEFAULT 0,
+		output_tokens         INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+		cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+		created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_cycle_history_agent ON cycle_history(agent_name, project)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_cycle_history_time ON cycle_history(created_at)`)
+
+	// Triggers (event-driven spawn rules)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS triggers (
+		id           TEXT PRIMARY KEY,
+		project      TEXT NOT NULL,
+		event        TEXT NOT NULL,
+		match_rules  TEXT NOT NULL DEFAULT '{}',
+		profile_slug TEXT NOT NULL,
+		cycle        TEXT NOT NULL,
+		max_duration TEXT NOT NULL DEFAULT '10m',
+		enabled      INTEGER NOT NULL DEFAULT 1,
+		created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_triggers_project_event ON triggers(project, event)`)
+	ensureColumns(conn, "triggers", map[string]string{
+		"cooldown_seconds": "INTEGER DEFAULT 60",
+		"last_fired_at":    "TEXT",
+	})
+
+	// Trigger history (event-driven spawn audit log)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS trigger_history (
+		id         TEXT PRIMARY KEY,
+		trigger_id TEXT NOT NULL,
+		project    TEXT NOT NULL,
+		event      TEXT NOT NULL,
+		child_id   TEXT,
+		error      TEXT,
+		fired_at   TEXT NOT NULL
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_trigger_history_project ON trigger_history(project, fired_at)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_trigger_history_trigger ON trigger_history(trigger_id)`)
+
+	// Poll triggers (external URL monitoring)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS poll_triggers (
+		id               TEXT PRIMARY KEY,
+		project          TEXT NOT NULL,
+		name             TEXT NOT NULL,
+		url              TEXT NOT NULL,
+		headers          TEXT DEFAULT '{}',
+		condition_path   TEXT NOT NULL,
+		condition_op     TEXT NOT NULL,
+		condition_value  TEXT NOT NULL,
+		poll_interval    TEXT NOT NULL,
+		fire_event       TEXT NOT NULL,
+		fire_meta        TEXT DEFAULT '{}',
+		enabled          INTEGER DEFAULT 1,
+		last_polled_at   TEXT,
+		last_result      TEXT,
+		last_matched     INTEGER DEFAULT 0,
+		cooldown_seconds INTEGER DEFAULT 300,
+		created_at       TEXT NOT NULL,
+		UNIQUE(project, name)
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_poll_triggers_project ON poll_triggers(project)`)
+
+	// Skill registry
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS skills (
+		id          TEXT PRIMARY KEY,
+		project     TEXT NOT NULL,
+		name        TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		tags        TEXT DEFAULT '[]',
+		created_at  TEXT NOT NULL,
+		UNIQUE(project, name)
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_skills_project ON skills(project)`)
+
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS profile_skills (
+		profile_id  TEXT NOT NULL,
+		skill_id    TEXT NOT NULL,
+		proficiency TEXT DEFAULT 'capable',
+		PRIMARY KEY (profile_id, skill_id),
+		FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+		FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+	)`)
+
+	// Elevated privileges (temporary privilege escalation)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS elevated_privileges (
+		id            TEXT PRIMARY KEY,
+		project       TEXT NOT NULL,
+		agent_name    TEXT NOT NULL,
+		elevated_role TEXT NOT NULL,
+		granted_by    TEXT NOT NULL,
+		reason        TEXT DEFAULT '',
+		expires_at    TEXT NOT NULL,
+		revoked_at    TEXT,
+		created_at    TEXT NOT NULL
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_elevated_project_agent ON elevated_privileges(project, agent_name)`)
+
+	// Agent quotas (per-agent rate limits)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS agent_quotas (
+		project              TEXT NOT NULL,
+		agent_name           TEXT NOT NULL,
+		max_tokens_per_day   INTEGER DEFAULT 0,
+		max_messages_per_hour INTEGER DEFAULT 0,
+		max_tasks_per_hour   INTEGER DEFAULT 0,
+		max_spawns_per_hour  INTEGER DEFAULT 0,
+		created_at           TEXT NOT NULL,
+		updated_at           TEXT NOT NULL,
+		PRIMARY KEY (project, agent_name)
+	)`)
 
 	// Lowercase all agent names for case-insensitive matching
 	migrateLowercaseAgentNames(conn)

@@ -161,6 +161,81 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiGetTokenUsageByAgent(w, req)
 	case path == "/token-usage/timeseries" && req.Method == http.MethodGet:
 		r.apiGetTokenTimeSeries(w, req)
+	// Spawn endpoints
+	case path == "/spawn/children" && req.Method == http.MethodGet:
+		r.apiGetSpawnChildren(w, req)
+	case path == "/spawn/children" && req.Method == http.MethodPost:
+		r.apiSpawnChild(w, req)
+	case strings.HasPrefix(path, "/spawn/children/") && strings.HasSuffix(path, "/kill") && req.Method == http.MethodPost:
+		r.apiKillSpawnChild(w, path)
+	case strings.HasPrefix(path, "/spawn/children/") && req.Method == http.MethodGet:
+		r.apiGetSpawnChild(w, path)
+	// Schedule endpoints
+	case path == "/schedules" && req.Method == http.MethodGet:
+		r.apiGetSchedules(w, req)
+	case path == "/schedules" && req.Method == http.MethodPost:
+		r.apiCreateSchedule(w, req)
+	case strings.HasPrefix(path, "/schedules/") && strings.HasSuffix(path, "/trigger") && req.Method == http.MethodPost:
+		r.apiTriggerSchedule(w, path)
+	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodPut:
+		r.apiUpdateSchedule(w, req, path)
+	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodGet:
+		r.apiGetSchedule(w, path)
+	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodDelete:
+		r.apiDeleteSchedule(w, path)
+	// Cycle history
+	case path == "/cycle-history" && req.Method == http.MethodGet:
+		r.apiGetCycleHistory(w, req)
+	// Triggers (event-driven spawn rules)
+	case path == "/triggers" && req.Method == http.MethodGet:
+		r.apiGetTriggers(w, req)
+	case path == "/triggers" && req.Method == http.MethodPost:
+		r.apiCreateTrigger(w, req)
+	case strings.HasPrefix(path, "/triggers/") && req.Method == http.MethodDelete:
+		r.apiDeleteTrigger(w, path)
+	// Agent OS spawn (profile + cycle)
+	case path == "/spawn/context" && req.Method == http.MethodPost:
+		r.apiSpawnWithContext(w, req)
+	// Trigger history + webhooks + signal handlers
+	case path == "/trigger-history" && req.Method == http.MethodGet:
+		r.apiGetTriggerHistory(w, req)
+	case strings.HasPrefix(path, "/webhooks/") && req.Method == http.MethodPost:
+		r.apiWebhook(w, req, path)
+	case path == "/signal-handlers" && req.Method == http.MethodPost:
+		r.apiCreateSignalHandler(w, req)
+	// Poll triggers (external URL monitoring)
+	case path == "/poll-triggers" && req.Method == http.MethodGet:
+		r.apiGetPollTriggers(w, req)
+	case path == "/poll-triggers" && req.Method == http.MethodPost:
+		r.apiCreatePollTrigger(w, req)
+	case strings.HasPrefix(path, "/poll-triggers/") && strings.HasSuffix(path, "/test") && req.Method == http.MethodPost:
+		r.apiTestPollTrigger(w, path)
+	case strings.HasPrefix(path, "/poll-triggers/") && req.Method == http.MethodDelete:
+		r.apiDeletePollTrigger(w, path)
+	// Skill registry
+	case path == "/skills" && req.Method == http.MethodGet:
+		r.apiGetSkills(w, req)
+	case path == "/skills" && req.Method == http.MethodPost:
+		r.apiCreateSkill(w, req)
+	case strings.HasPrefix(path, "/skills/") && strings.HasSuffix(path, "/profiles") && req.Method == http.MethodGet:
+		r.apiGetSkillProfiles(w, req, path)
+	// Service discovery
+	case path == "/discover" && req.Method == http.MethodGet:
+		r.apiDiscover(w, req)
+	// Per-agent quotas
+	case path == "/quotas" && req.Method == http.MethodGet:
+		r.apiGetQuotas(w, req)
+	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodGet:
+		r.apiGetAgentQuota(w, req, path)
+	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodPut:
+		r.apiSetAgentQuota(w, req, path)
+	// Privilege escalation
+	case path == "/elevations" && req.Method == http.MethodGet:
+		r.apiGetElevations(w, req)
+	case path == "/elevations" && req.Method == http.MethodPost:
+		r.apiGrantElevation(w, req)
+	case strings.HasPrefix(path, "/elevations/") && req.Method == http.MethodDelete:
+		r.apiRevokeElevation(w, path)
 	default:
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 	}

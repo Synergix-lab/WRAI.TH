@@ -4,12 +4,17 @@ import (
 	"context"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"agent-relay/internal/config"
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
+	"agent-relay/internal/lock"
+	"agent-relay/internal/scheduler"
+	"agent-relay/internal/spawn"
 	"agent-relay/internal/vault"
 	"agent-relay/internal/web"
 
@@ -25,6 +30,9 @@ type Relay struct {
 	Ingester     *ingest.Ingester
 	VaultWatcher *vault.Watcher
 	Events       *EventBus
+	SpawnMgr     *spawn.Manager
+	Scheduler    *scheduler.Scheduler
+	Handlers     *Handlers
 	Config       config.Config
 	httpServer   *http.Server
 	StartedAt    time.Time
@@ -43,6 +51,24 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 	events := NewEventBus()
 	registry := NewSessionRegistry(mcpSrv)
 	handlers := NewHandlers(database, registry, ingester, vaultWatcher, events)
+
+	// Initialize spawn infrastructure
+	logger := log.Default()
+	slogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	executor := spawn.NewExecutor(cfg.ClaudeBinary, slogger)
+	lockMgr := lock.NewManager(cfg.LocksDir, "relay-", slogger)
+	queue := lock.NewPriorityQueue(slogger)
+	sched := scheduler.New(slogger)
+
+	var spawnMgr *spawn.Manager
+	if executor.IsClaudeAvailable() {
+		spawnMgr = spawn.NewManager(database, executor, lockMgr, queue, sched, cfg.MaxPoolSize, slogger)
+		handlers.SetSpawnManager(spawnMgr)
+		logger.Println("spawn: claude binary found, spawn/schedule enabled")
+	} else {
+		logger.Println("spawn: claude binary not found, spawn/schedule disabled")
+	}
 
 	// Register all tools
 	mcpSrv.AddTools(
@@ -126,6 +152,15 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 		server.ServerTool{Tool: removeTeamMemberTool(), Handler: handlers.HandleRemoveTeamMember},
 		server.ServerTool{Tool: getTeamInboxTool(), Handler: handlers.HandleGetTeamInbox},
 		server.ServerTool{Tool: addNotifyChannelTool(), Handler: handlers.HandleAddNotifyChannel},
+		// Spawn (fork/exec)
+		server.ServerTool{Tool: spawnTool(), Handler: handlers.HandleSpawn},
+		server.ServerTool{Tool: killChildTool(), Handler: handlers.HandleKillChild},
+		server.ServerTool{Tool: listChildrenTool(), Handler: handlers.HandleListChildren},
+		// Schedule (crontab)
+		server.ServerTool{Tool: scheduleTool(), Handler: handlers.HandleSchedule},
+		server.ServerTool{Tool: unscheduleTool(), Handler: handlers.HandleUnschedule},
+		server.ServerTool{Tool: listSchedulesTool(), Handler: handlers.HandleListSchedules},
+		server.ServerTool{Tool: triggerCycleTool(), Handler: handlers.HandleTriggerCycle},
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(
@@ -143,6 +178,9 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 		Ingester:     ingester,
 		VaultWatcher: vaultWatcher,
 		Events:       events,
+		SpawnMgr:     spawnMgr,
+		Scheduler:    sched,
+		Handlers:     handlers,
 		Config:       cfg,
 		StartedAt:    time.Now().UTC(),
 	}
