@@ -19,6 +19,11 @@ func (h *Handlers) fireTriggers(project, event string, meta map[string]string) {
 	}
 
 	for _, t := range triggers {
+		// Evaluate match rules first (don't waste cooldown on non-matching events)
+		if !matchesRules(t.MatchRules, meta) {
+			continue
+		}
+
 		// Cooldown check
 		if t.LastFiredAt != "" {
 			if lastFired, err := time.Parse("2006-01-02T15:04:05Z", t.LastFiredAt); err == nil {
@@ -28,11 +33,6 @@ func (h *Handlers) fireTriggers(project, event string, meta map[string]string) {
 					continue
 				}
 			}
-		}
-
-		// Evaluate match rules
-		if !matchesRules(t.MatchRules, meta) {
-			continue
 		}
 
 		// Spawn via SpawnWithContext if spawn manager is available
@@ -151,6 +151,12 @@ func (h *Handlers) fireTriggersSync(project, event string, meta map[string]strin
 	}
 
 	for _, t := range triggers {
+		// Evaluate match rules first (don't waste cooldown on non-matching events)
+		if !matchesRules(t.MatchRules, meta) {
+			skipped = append(skipped, webhookSkipped{TriggerID: t.ID, Reason: "rules_mismatch"})
+			continue
+		}
+
 		// Cooldown check
 		if t.LastFiredAt != "" {
 			if lastFired, err := time.Parse("2006-01-02T15:04:05Z", t.LastFiredAt); err == nil {
@@ -160,11 +166,6 @@ func (h *Handlers) fireTriggersSync(project, event string, meta map[string]strin
 					continue
 				}
 			}
-		}
-
-		if !matchesRules(t.MatchRules, meta) {
-			skipped = append(skipped, webhookSkipped{TriggerID: t.ID, Reason: "rules_mismatch"})
-			continue
 		}
 
 		var childID string

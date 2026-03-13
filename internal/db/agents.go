@@ -176,7 +176,10 @@ func (d *DB) GetAgentsByProfile(project, profileSlug string) ([]models.Agent, er
 // FindActiveAgentsBySkill returns active agents whose profile is linked to the given skill.
 func (d *DB) FindActiveAgentsBySkill(project, skillName string) ([]models.Agent, error) {
 	rows, err := d.ro().Query(
-		`SELECT `+agentColumns+` FROM agents a
+		`SELECT a.id, a.name, a.role, a.description, a.registered_at, a.last_seen, a.project,
+		 a.reports_to, a.profile_slug, a.status, a.deactivated_at, a.is_executive, a.session_id,
+		 a.interest_tags, a.max_context_bytes
+		 FROM agents a
 		 JOIN profiles p ON p.slug = a.profile_slug AND p.project = a.project
 		 JOIN profile_skills ps ON ps.profile_id = p.id
 		 JOIN skills s ON s.id = ps.skill_id

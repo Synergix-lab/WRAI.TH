@@ -70,7 +70,9 @@ func (d *DB) LinkProfileSkill(profileID, skillID, proficiency string) error {
 // FindProfilesBySkill returns profiles linked to a specific skill via the structured registry.
 func (d *DB) FindProfilesBySkill(project, skillName string) ([]models.Profile, error) {
 	rows, err := d.ro().Query(
-		`SELECT `+profileColumns+` FROM profiles p
+		`SELECT p.id, p.slug, p.name, p.role, p.context_pack, p.soul_keys, p.skills, p.vault_paths,
+		 p.allowed_tools, p.pool_size, p.project, p.org_id, p.created_at, p.updated_at
+		 FROM profiles p
 		 JOIN profile_skills ps ON ps.profile_id = p.id
 		 JOIN skills s ON s.id = ps.skill_id
 		 WHERE p.project = ? AND s.name = ?
