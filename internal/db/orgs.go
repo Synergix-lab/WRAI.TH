@@ -417,6 +417,12 @@ func (d *DB) CanMessage(project, sender, target string) (bool, error) {
 		return true, nil
 	}
 
+	// Privilege escalation check: if sender has active elevation to admin, allow
+	elevation, err := d.GetActiveElevation(project, sender)
+	if err == nil && elevation != nil && elevation.ElevatedRole == "admin" {
+		return true, nil
+	}
+
 	return false, nil
 }
 
