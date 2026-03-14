@@ -96,9 +96,9 @@ func BuildSpawnContext(database *db.DB, project, profileSlug, cycleName string, 
 
 	ctx := &SpawnContext{
 		Identity: &ContextIdentity{
-			Profile:    profile.Slug,
-			Project:    project,
-			Role:       profile.Role,
+			Profile:     profile.Slug,
+			Project:     project,
+			Role:        profile.Role,
 			ContextPack: profile.ContextPack,
 		},
 		Knowledge: &ContextKnowledge{},
@@ -281,37 +281,37 @@ func FormatPrompt(ctx *SpawnContext) string {
 
 	// --- Identity ---
 	b.WriteString("## Identity\n\n")
-	b.WriteString(fmt.Sprintf("- **Profile:** %s\n", ctx.Identity.Profile))
-	b.WriteString(fmt.Sprintf("- **Project:** %s\n", ctx.Identity.Project))
-	b.WriteString(fmt.Sprintf("- **Role:** %s\n", ctx.Identity.Role))
+	fmt.Fprintf(&b, "- **Profile:** %s\n", ctx.Identity.Profile)
+	fmt.Fprintf(&b, "- **Project:** %s\n", ctx.Identity.Project)
+	fmt.Fprintf(&b, "- **Role:** %s\n", ctx.Identity.Role)
 	if ctx.Identity.ReportsTo != "" {
-		b.WriteString(fmt.Sprintf("- **Reports to:** %s\n", ctx.Identity.ReportsTo))
+		fmt.Fprintf(&b, "- **Reports to:** %s\n", ctx.Identity.ReportsTo)
 	}
 	if ctx.Identity.ContextPack != "" {
-		b.WriteString(fmt.Sprintf("\n%s\n", ctx.Identity.ContextPack))
+		fmt.Fprintf(&b, "\n%s\n", ctx.Identity.ContextPack)
 	}
 	b.WriteString("\n")
 
 	// --- Boot: register first ---
 	b.WriteString("## Boot: Register First\n\n")
-	b.WriteString(fmt.Sprintf("**Step 0 — before anything else**, call:\n```\nregister_agent(name: %q, role: %q, project: %q", ctx.Identity.Profile, ctx.Identity.Role, ctx.Identity.Project))
+	fmt.Fprintf(&b, "**Step 0 — before anything else**, call:\n```\nregister_agent(name: %q, role: %q, project: %q", ctx.Identity.Profile, ctx.Identity.Role, ctx.Identity.Project)
 	if ctx.Identity.ReportsTo != "" {
-		b.WriteString(fmt.Sprintf(", reports_to: %q", ctx.Identity.ReportsTo))
+		fmt.Fprintf(&b, ", reports_to: %q", ctx.Identity.ReportsTo)
 	}
-	b.WriteString(fmt.Sprintf(", profile_slug: %q)\n```\n", ctx.Identity.Profile))
+	fmt.Fprintf(&b, ", profile_slug: %q)\n```\n", ctx.Identity.Profile)
 	b.WriteString("This connects your session to the relay. Without it you cannot send/receive messages, claim tasks, or ACK notifications.\n\n")
 
 	// --- Relay identity reminder ---
-	b.WriteString(fmt.Sprintf("Pass `as: %q` and `project: %q` on **every** relay tool call (except register_agent which uses `name`).\n\n", ctx.Identity.Profile, ctx.Identity.Project))
+	fmt.Fprintf(&b, "Pass `as: %q` and `project: %q` on **every** relay tool call (except register_agent which uses `name`).\n\n", ctx.Identity.Profile, ctx.Identity.Project)
 
 	// --- Task ---
 	if ctx.Task != nil {
 		b.WriteString("## Task\n\n")
-		b.WriteString(fmt.Sprintf("**[%s] %s**\n\n", ctx.Task.Priority, ctx.Task.Title))
+		fmt.Fprintf(&b, "**[%s] %s**\n\n", ctx.Task.Priority, ctx.Task.Title)
 		b.WriteString(ctx.Task.Description)
 		b.WriteString("\n")
 		if ctx.Task.Acceptance != "" {
-			b.WriteString(fmt.Sprintf("\n**Acceptance criteria:** %s\n", ctx.Task.Acceptance))
+			fmt.Fprintf(&b, "\n**Acceptance criteria:** %s\n", ctx.Task.Acceptance)
 		}
 		b.WriteString("\n")
 	}
@@ -327,7 +327,7 @@ func FormatPrompt(ctx *SpawnContext) string {
 	if len(ctx.Knowledge.Constraints) > 0 {
 		b.WriteString("## Constraints (non-negotiable)\n\n")
 		for _, c := range ctx.Knowledge.Constraints {
-			b.WriteString(fmt.Sprintf("- %s\n", c))
+			fmt.Fprintf(&b, "- %s\n", c)
 		}
 		b.WriteString("\n")
 	}
@@ -339,7 +339,7 @@ func FormatPrompt(ctx *SpawnContext) string {
 		if len(ctx.Knowledge.Conventions) > 0 {
 			b.WriteString("### Conventions (use `get_vault_doc` to load)\n\n")
 			for _, c := range ctx.Knowledge.Conventions {
-				b.WriteString(fmt.Sprintf("- %s\n", c))
+				fmt.Fprintf(&b, "- %s\n", c)
 			}
 			b.WriteString("\n")
 		}
@@ -347,13 +347,13 @@ func FormatPrompt(ctx *SpawnContext) string {
 		if len(ctx.Knowledge.Lessons) > 0 {
 			b.WriteString("### Lessons Learned\n\n")
 			for _, l := range ctx.Knowledge.Lessons {
-				b.WriteString(fmt.Sprintf("- %s\n", l))
+				fmt.Fprintf(&b, "- %s\n", l)
 			}
 			b.WriteString("\n")
 		}
 
 		if ctx.Knowledge.LastCycle != "" {
-			b.WriteString(fmt.Sprintf("### Last Cycle\n\n%s\n\n", ctx.Knowledge.LastCycle))
+			fmt.Fprintf(&b, "### Last Cycle\n\n%s\n\n", ctx.Knowledge.LastCycle)
 		}
 	}
 
@@ -365,9 +365,9 @@ func FormatPrompt(ctx *SpawnContext) string {
 			if m.Priority != "" {
 				prio = fmt.Sprintf(" (%s)", m.Priority)
 			}
-			b.WriteString(fmt.Sprintf("**From %s%s:** %s\n", m.From, prio, m.Subject))
+			fmt.Fprintf(&b, "**From %s%s:** %s\n", m.From, prio, m.Subject)
 			if m.Content != "" {
-				b.WriteString(fmt.Sprintf("> %s\n", m.Content))
+				fmt.Fprintf(&b, "> %s\n", m.Content)
 			}
 			b.WriteString("\n")
 		}
@@ -377,22 +377,12 @@ func FormatPrompt(ctx *SpawnContext) string {
 	if ctx.Team != nil && len(ctx.Team.Agents) > 0 {
 		b.WriteString("## Team\n\n")
 		for _, a := range ctx.Team.Agents {
-			b.WriteString(fmt.Sprintf("- **%s** — %s (last seen: %s)\n", a.Name, a.Status, a.LastSeen))
+			fmt.Fprintf(&b, "- **%s** — %s (last seen: %s)\n", a.Name, a.Status, a.LastSeen)
 		}
-		b.WriteString(fmt.Sprintf("\nPending tasks: %d | Blocked tasks: %d\n\n", ctx.Team.PendingTasks, ctx.Team.BlockedTasks))
+		fmt.Fprintf(&b, "\nPending tasks: %d | Blocked tasks: %d\n\n", ctx.Team.PendingTasks, ctx.Team.BlockedTasks)
 	}
 
 	b.WriteString("When done: persist what you learned via `set_memory`, then exit.\n")
 
 	return b.String()
 }
-
-func containsStr(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-

@@ -431,7 +431,7 @@ func (r *Relay) apiWebhook(w http.ResponseWriter, req *http.Request, path string
 func (r *Relay) apiCreateSignalHandler(w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		Project     string `json:"project"`
-		Signal      string `json:"signal"`       // e.g. "interrupt", "alert"
+		Signal      string `json:"signal"` // e.g. "interrupt", "alert"
 		MatchRules  string `json:"match_rules"`
 		ProfileSlug string `json:"profile_slug"`
 		Cycle       string `json:"cycle"`
@@ -815,10 +815,10 @@ func (r *Relay) apiGrantElevation(w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		Project   string `json:"project"`
 		Agent     string `json:"agent"`
-		Role      string `json:"role"`       // admin, lead
+		Role      string `json:"role"` // admin, lead
 		GrantedBy string `json:"granted_by"`
 		Reason    string `json:"reason"`
-		Duration  string `json:"duration"`   // e.g. "1h", "30m"
+		Duration  string `json:"duration"` // e.g. "1h", "30m"
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		apiError(w, http.StatusBadRequest, "invalid JSON", err)

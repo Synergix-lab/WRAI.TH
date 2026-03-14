@@ -27,8 +27,8 @@ type PTYSession struct {
 
 	// Ring buffer for replay on reconnect
 	ring    []byte
-	ringPos int  // next write position in ring
-	ringLen int  // bytes written (capped at replayBufSize)
+	ringPos int // next write position in ring
+	ringLen int // bytes written (capped at replayBufSize)
 
 	// Subscriber channels — each WS connection gets one
 	subs   map[uint64]chan []byte

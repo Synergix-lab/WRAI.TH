@@ -198,8 +198,8 @@ func (r *Relay) apiGetWorkflowRunDetail(w http.ResponseWriter, path string) {
 	}
 
 	writeJSON(w, map[string]any{
-		"run":        run,
-		"node_runs":  nodeRuns,
+		"run":       run,
+		"node_runs": nodeRuns,
 	})
 }
 

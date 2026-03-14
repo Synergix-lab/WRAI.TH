@@ -77,7 +77,10 @@ func (d *DB) ListAllEnabledSchedules() []map[string]any {
 	return scanScheduleRows(rows)
 }
 
-func scanScheduleRows(rows interface{ Next() bool; Scan(...any) error }) []map[string]any {
+func scanScheduleRows(rows interface {
+	Next() bool
+	Scan(...any) error
+}) []map[string]any {
 	var result []map[string]any
 	for rows.Next() {
 		var id, agentName, project, name, cronExpr, prompt, ttl, cycle, allowedTools, createdAt, updatedAt string

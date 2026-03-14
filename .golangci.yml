@@ -21,6 +21,14 @@ linters:
     - revive
 
   settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (net/http.ResponseWriter).Write
+        - (*os.File).Close
+        - os.Remove
     revive:
       rules:
         - name: exported

@@ -17,7 +17,7 @@ import (
 // Node represents a single node in the workflow DAG.
 type Node struct {
 	ID     string         `json:"id"`
-	Type   string         `json:"type"`   // e.g. "trigger:event", "condition:match", "action:spawn"
+	Type   string         `json:"type"` // e.g. "trigger:event", "condition:match", "action:spawn"
 	Label  string         `json:"label"`
 	Config map[string]any `json:"config"` // type-specific configuration
 	X      float64        `json:"x"`      // visual position
@@ -37,7 +37,7 @@ type Engine struct {
 	db       *db.DB
 	spawnMgr *spawn.Manager
 	msgFunc  func(project, from, to, msgType, subject, content string) error // for action:message
-	taskFunc func(project, profile, title, desc string) (string, error)       // for action:task
+	taskFunc func(project, profile, title, desc string) (string, error)      // for action:task
 	logger   *log.Logger
 }
 

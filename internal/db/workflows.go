@@ -12,8 +12,8 @@ type Workflow struct {
 	Project     string `json:"project"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Nodes       string `json:"nodes"`   // JSON array of node definitions
-	Edges       string `json:"edges"`   // JSON array of edge definitions
+	Nodes       string `json:"nodes"` // JSON array of node definitions
+	Edges       string `json:"edges"` // JSON array of edge definitions
 	Enabled     bool   `json:"enabled"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`

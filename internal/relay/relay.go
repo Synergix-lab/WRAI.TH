@@ -24,15 +24,15 @@ import (
 
 // Relay is the main struct that wires together the MCP server, DB, and notifications.
 type Relay struct {
-	MCPServer    *server.MCPServer
-	HTTP         *server.StreamableHTTPServer
-	DB           *db.DB
-	Registry     *SessionRegistry
-	Ingester     *ingest.Ingester
-	VaultWatcher *vault.Watcher
-	Events       *EventBus
-	SpawnMgr     *spawn.Manager
-	Scheduler    *scheduler.Scheduler
+	MCPServer      *server.MCPServer
+	HTTP           *server.StreamableHTTPServer
+	DB             *db.DB
+	Registry       *SessionRegistry
+	Ingester       *ingest.Ingester
+	VaultWatcher   *vault.Watcher
+	Events         *EventBus
+	SpawnMgr       *spawn.Manager
+	Scheduler      *scheduler.Scheduler
 	PTYMgr         *spawn.PTYManager
 	Handlers       *Handlers
 	WorkflowEngine *workflow.Engine

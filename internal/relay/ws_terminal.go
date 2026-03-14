@@ -95,7 +95,7 @@ func (r *Relay) apiTerminalWS(w http.ResponseWriter, req *http.Request, path str
 		log.Printf("[ws-terminal] upgrade failed: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Subscribe to PTY output — get replay + live channel
 	replay, live, subID := sess.Subscribe()
@@ -117,14 +117,14 @@ func (r *Relay) apiTerminalWS(w http.ResponseWriter, req *http.Request, path str
 			case chunk, ok := <-live:
 				if !ok {
 					// Channel closed — subscriber removed or session ended
-					conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"exit"}`))
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"exit"}`))
 					return
 				}
 				if err := conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 					return
 				}
 			case <-sess.Done():
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"exit"}`))
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"exit"}`))
 				return
 			}
 		}
@@ -137,22 +137,23 @@ func (r *Relay) apiTerminalWS(w http.ResponseWriter, req *http.Request, path str
 			break
 		}
 
-		if msgType == websocket.TextMessage {
+		switch msgType {
+		case websocket.TextMessage:
 			var msg wsMessage
 			if json.Unmarshal(data, &msg) == nil {
 				switch msg.Type {
 				case "resize":
 					if msg.Rows > 0 && msg.Cols > 0 {
-						sess.Resize(msg.Rows, msg.Cols)
+						_ = sess.Resize(msg.Rows, msg.Cols)
 					}
 				case "input":
-					sess.Write([]byte(msg.Data))
+					_, _ = sess.Write([]byte(msg.Data))
 				case "ping":
-					conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
 				}
 			}
-		} else if msgType == websocket.BinaryMessage {
-			sess.Write(data)
+		case websocket.BinaryMessage:
+			_, _ = sess.Write(data)
 		}
 	}
 

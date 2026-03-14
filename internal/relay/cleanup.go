@@ -54,11 +54,11 @@ func StartCleanup(database *db.DB, done <-chan struct{}) {
 					log.Printf("expired %d file lock(s)", expired)
 				}
 				if expired, err := database.ExpireElevations(); err != nil {
-				log.Printf("expire elevations error: %v", err)
-			} else if expired > 0 {
-				log.Printf("expired %d elevation(s)", expired)
-			}
-			if purged, err := database.PurgeOldTokenUsage(90 * 24 * time.Hour); err != nil {
+					log.Printf("expire elevations error: %v", err)
+				} else if expired > 0 {
+					log.Printf("expired %d elevation(s)", expired)
+				}
+				if purged, err := database.PurgeOldTokenUsage(90 * 24 * time.Hour); err != nil {
 					log.Printf("purge token usage error: %v", err)
 				} else if purged > 0 {
 					log.Printf("purged %d old token usage record(s)", purged)

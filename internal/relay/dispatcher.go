@@ -6,8 +6,6 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // fireTriggers queries matching triggers for the given project/event and spawns children.
@@ -195,9 +193,4 @@ func (h *Handlers) fireTriggersSync(project, event string, meta map[string]strin
 		}
 	}
 	return
-}
-
-// newTriggerFireID generates a UUID for trigger history records.
-func newTriggerFireID() string {
-	return uuid.New().String()
 }
