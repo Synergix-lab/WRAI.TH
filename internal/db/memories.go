@@ -484,6 +484,20 @@ func (d *DB) ResolveConflict(project, agentName, key, chosenValue, scope string)
 	return winner, nil
 }
 
+// GetMemoriesByLayer returns all active memories for an agent filtered by layer.
+// Cross-scope: returns agent + project + global memories (same cascade as search).
+func (d *DB) GetMemoriesByLayer(project, agentName, layer string) ([]models.Memory, error) {
+	return d.queryMemories(
+		`SELECT id, key, value, tags, scope, project, agent_name, confidence, version,
+		 supersedes, conflict_with, created_at, updated_at, archived_at, archived_by, layer
+		 FROM memories
+		 WHERE archived_at IS NULL AND layer = ?
+		   AND (scope = 'global' OR (project = ? AND (scope = 'project' OR (scope = 'agent' AND agent_name = ?))))
+		 ORDER BY updated_at DESC`,
+		layer, project, agentName,
+	)
+}
+
 // ListAllMemories returns all active memories across projects (for web UI).
 func (d *DB) ListAllMemories(limit int) ([]models.Memory, error) {
 	if limit <= 0 {

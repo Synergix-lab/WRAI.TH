@@ -57,6 +57,19 @@ func (d *DB) ListSkills(project string) ([]models.Skill, error) {
 	return result, rows.Err()
 }
 
+// DeleteSkill removes a skill and its profile links.
+func (d *DB) DeleteSkill(project, name string) error {
+	// Get skill ID first
+	var id string
+	err := d.conn.QueryRow("SELECT id FROM skills WHERE project = ? AND name = ?", project, name).Scan(&id)
+	if err != nil {
+		return err
+	}
+	_, _ = d.conn.Exec("DELETE FROM profile_skills WHERE skill_id = ?", id)
+	_, err = d.conn.Exec("DELETE FROM skills WHERE id = ?", id)
+	return err
+}
+
 // LinkProfileSkill creates a link between a profile and a skill.
 func (d *DB) LinkProfileSkill(profileID, skillID, proficiency string) error {
 	if proficiency == "" {
@@ -65,6 +78,47 @@ func (d *DB) LinkProfileSkill(profileID, skillID, proficiency string) error {
 	_, err := d.conn.Exec(`INSERT OR REPLACE INTO profile_skills (profile_id, skill_id, proficiency) VALUES (?, ?, ?)`,
 		profileID, skillID, proficiency)
 	return err
+}
+
+// UnlinkProfileSkill removes the link between a profile and a skill.
+func (d *DB) UnlinkProfileSkill(profileID, skillID string) error {
+	_, err := d.conn.Exec(`DELETE FROM profile_skills WHERE profile_id = ? AND skill_id = ?`, profileID, skillID)
+	return err
+}
+
+// GetProfileSkillLinks returns all skills linked to a profile with proficiency info.
+func (d *DB) GetProfileSkillLinks(profileID string) ([]map[string]any, error) {
+	rows, err := d.ro().Query(
+		`SELECT s.id, s.name, s.description, COALESCE(ps.proficiency, 'capable')
+		 FROM skills s
+		 JOIN profile_skills ps ON ps.skill_id = s.id
+		 WHERE ps.profile_id = ?
+		 ORDER BY s.name`, profileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	for rows.Next() {
+		var id, name, desc, prof string
+		if err := rows.Scan(&id, &name, &desc, &prof); err != nil {
+			continue
+		}
+		result = append(result, map[string]any{"id": id, "name": name, "description": desc, "proficiency": prof})
+	}
+	return result, rows.Err()
+}
+
+// GetSkillByName returns a skill by project + name.
+func (d *DB) GetSkillByName(project, name string) (*models.Skill, error) {
+	var s models.Skill
+	err := d.ro().QueryRow(`SELECT id, project, name, description, tags, created_at FROM skills WHERE project = ? AND name = ?`, project, name).
+		Scan(&s.ID, &s.Project, &s.Name, &s.Description, &s.Tags, &s.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 // FindProfilesBySkill returns profiles linked to a specific skill via the structured registry.

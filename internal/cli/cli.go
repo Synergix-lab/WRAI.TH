@@ -38,6 +38,12 @@ func Run(args []string) {
 		runConversations(rest)
 	case "memories":
 		runMemories(rest)
+	case "children":
+		runChildren(rest)
+	case "schedules":
+		runSchedules(rest)
+	case "history":
+		runHistory(rest)
 	case "update":
 		runUpdate(rest)
 	default:
@@ -110,6 +116,10 @@ commands:
     -s <query>                 search memories (FTS5)
     -a <agent>                 filter by agent
     -t <tag>                   filter by tag
+  children [-p project] [agent]  list spawned child agents
+    -s <status>                filter: running, finished, killed, all
+  schedules [-p project] [agent] list cron schedules
+  history [-p project] [agent]   show cycle execution history
 
 flags:
   -p, --project <name>   filter by project (default: "default")

@@ -251,6 +251,44 @@ func (d *DB) GetVaultDocsByPaths(project string, patterns []string, maxTotalByte
 	return docs, nil
 }
 
+// GetVaultDocsIndex returns path + title only (no content) for matching patterns. Used for prompt injection.
+func (d *DB) GetVaultDocsIndex(project string, patterns []string) ([]models.VaultDocRef, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+
+	var refs []models.VaultDocRef
+	for _, pattern := range patterns {
+		var rows *sql.Rows
+		var err error
+
+		if strings.Contains(pattern, "*") {
+			like := strings.ReplaceAll(pattern, "*", "%")
+			rows, err = d.ro().Query(
+				"SELECT path, title FROM vault_docs WHERE project = ? AND path LIKE ? ORDER BY path",
+				project, like,
+			)
+		} else {
+			rows, err = d.ro().Query(
+				"SELECT path, title FROM vault_docs WHERE project = ? AND path = ?",
+				project, pattern,
+			)
+		}
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var ref models.VaultDocRef
+			if err := rows.Scan(&ref.Path, &ref.Title); err != nil {
+				break
+			}
+			refs = append(refs, ref)
+		}
+		_ = rows.Close()
+	}
+	return refs, nil
+}
+
 // GetVaultDocsByTags returns vault docs where tags match any of the given tags.
 func (d *DB) GetVaultDocsByTags(project string, tags []string, maxTotalBytes int) ([]models.VaultDoc, error) {
 	if len(tags) == 0 {

@@ -9,15 +9,28 @@ import (
 	"github.com/google/uuid"
 )
 
-const profileColumns = "id, slug, name, role, context_pack, soul_keys, skills, vault_paths, project, org_id, created_at, updated_at"
+const profileColumns = "id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, project, org_id, created_at, updated_at"
 
 func scanProfile(row interface{ Scan(...any) error }) (models.Profile, error) {
 	var p models.Profile
-	err := row.Scan(&p.ID, &p.Slug, &p.Name, &p.Role, &p.ContextPack, &p.SoulKeys, &p.Skills, &p.VaultPaths, &p.Project, &p.OrgID, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.Slug, &p.Name, &p.Role, &p.ContextPack, &p.SoulKeys, &p.Skills, &p.VaultPaths, &p.AllowedTools, &p.PoolSize, &p.Project, &p.OrgID, &p.CreatedAt, &p.UpdatedAt)
 	return p, err
 }
 
-func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths string) (*models.Profile, error) {
+// ProfileOption sets optional fields when registering a profile.
+type ProfileOption func(*models.Profile)
+
+// WithAllowedTools sets the allowed tools for a profile.
+func WithAllowedTools(tools string) ProfileOption {
+	return func(p *models.Profile) { p.AllowedTools = tools }
+}
+
+// WithPoolSize sets the max concurrent spawns for a profile.
+func WithPoolSize(size int) ProfileOption {
+	return func(p *models.Profile) { p.PoolSize = size }
+}
+
+func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths string, opts ...ProfileOption) (*models.Profile, error) {
 	now := time.Now().UTC().Format(memoryTimeFmt)
 	if soulKeys == "" {
 		soulKeys = "[]"
@@ -37,21 +50,26 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 
 	if err == sql.ErrNoRows {
 		p := &models.Profile{
-			ID:          uuid.New().String(),
-			Slug:        slug,
-			Name:        name,
-			Role:        role,
-			ContextPack: contextPack,
-			SoulKeys:    soulKeys,
-			Skills:      skills,
-			VaultPaths:  vaultPaths,
-			Project:     project,
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			ID:           uuid.New().String(),
+			Slug:         slug,
+			Name:         name,
+			Role:         role,
+			ContextPack:  contextPack,
+			SoulKeys:     soulKeys,
+			Skills:       skills,
+			VaultPaths:   vaultPaths,
+			AllowedTools: "[]",
+			PoolSize:     3,
+			Project:      project,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		for _, opt := range opts {
+			opt(p)
 		}
 		_, err := d.conn.Exec(
-			"INSERT INTO profiles (id, slug, name, role, context_pack, soul_keys, skills, vault_paths, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.ID, p.Slug, p.Name, p.Role, p.ContextPack, p.SoulKeys, p.Skills, p.VaultPaths, p.Project, p.CreatedAt, p.UpdatedAt,
+			"INSERT INTO profiles (id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.ID, p.Slug, p.Name, p.Role, p.ContextPack, p.SoulKeys, p.Skills, p.VaultPaths, p.AllowedTools, p.PoolSize, p.Project, p.CreatedAt, p.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert profile: %w", err)
@@ -63,13 +81,6 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 	}
 
 	// Update existing
-	_, err = d.conn.Exec(
-		"UPDATE profiles SET name = ?, role = ?, context_pack = ?, soul_keys = ?, skills = ?, vault_paths = ?, updated_at = ? WHERE slug = ? AND project = ?",
-		name, role, contextPack, soulKeys, skills, vaultPaths, now, slug, project,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("update profile: %w", err)
-	}
 	existing.Name = name
 	existing.Role = role
 	existing.ContextPack = contextPack
@@ -77,6 +88,17 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 	existing.Skills = skills
 	existing.VaultPaths = vaultPaths
 	existing.UpdatedAt = now
+	for _, opt := range opts {
+		opt(&existing)
+	}
+
+	_, err = d.conn.Exec(
+		"UPDATE profiles SET name = ?, role = ?, context_pack = ?, soul_keys = ?, skills = ?, vault_paths = ?, allowed_tools = ?, pool_size = ?, updated_at = ? WHERE slug = ? AND project = ?",
+		existing.Name, existing.Role, existing.ContextPack, existing.SoulKeys, existing.Skills, existing.VaultPaths, existing.AllowedTools, existing.PoolSize, now, slug, project,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update profile: %w", err)
+	}
 	return &existing, nil
 }
 
@@ -133,6 +155,12 @@ func (d *DB) ListAllProfiles() ([]models.Profile, error) {
 		profiles = append(profiles, p)
 	}
 	return profiles, rows.Err()
+}
+
+// DeleteProfile removes a profile by slug and project.
+func (d *DB) DeleteProfile(project, slug string) error {
+	_, err := d.conn.Exec("DELETE FROM profiles WHERE slug = ? AND project = ?", slug, project)
+	return err
 }
 
 // FindProfilesBySkillTag returns profiles whose skills JSON contains the given tag.

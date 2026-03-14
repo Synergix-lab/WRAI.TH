@@ -13,12 +13,20 @@ type Config struct {
 	CORSOrigins []string // RELAY_CORS_ORIGINS: allowed origins (comma-separated)
 	MaxBody     int64    // RELAY_MAX_BODY: max request body in bytes
 	RateLimit   int      // RELAY_RATE_LIMIT: requests/minute per IP
+
+	// Spawn/scheduler settings
+	ClaudeBinary string // RELAY_CLAUDE_BINARY: path to claude CLI (default: "claude")
+	LocksDir     string // RELAY_LOCKS_DIR: directory for flock files (default: "/tmp/")
+	MaxPoolSize  int    // RELAY_MAX_POOL_SIZE: global max concurrent spawned children (default: 10)
 }
 
 // Load reads configuration from environment variables with safe defaults.
 func Load() Config {
 	cfg := Config{
-		APIKey: os.Getenv("RELAY_API_KEY"),
+		APIKey:       os.Getenv("RELAY_API_KEY"),
+		ClaudeBinary: "claude",
+		LocksDir:     "/tmp/",
+		MaxPoolSize:  10,
 	}
 
 	if v := os.Getenv("RELAY_CORS_ORIGINS"); v != "" {
@@ -39,6 +47,20 @@ func Load() Config {
 	if v := os.Getenv("RELAY_RATE_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.RateLimit = n
+		}
+	}
+
+	if v := os.Getenv("RELAY_CLAUDE_BINARY"); v != "" {
+		cfg.ClaudeBinary = v
+	}
+
+	if v := os.Getenv("RELAY_LOCKS_DIR"); v != "" {
+		cfg.LocksDir = v
+	}
+
+	if v := os.Getenv("RELAY_MAX_POOL_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxPoolSize = n
 		}
 	}
 

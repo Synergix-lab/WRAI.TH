@@ -647,6 +647,75 @@ func migrate(conn *sql.DB) error {
 		PRIMARY KEY (project, agent_name)
 	)`)
 
+	// Workflows (visual DAG definitions)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS workflows (
+		id          TEXT PRIMARY KEY,
+		project     TEXT NOT NULL,
+		name        TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		nodes       TEXT NOT NULL DEFAULT '[]',
+		edges       TEXT NOT NULL DEFAULT '[]',
+		enabled     INTEGER DEFAULT 1,
+		created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project)`)
+
+	// Workflow runs (execution log)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS workflow_runs (
+		id            TEXT PRIMARY KEY,
+		workflow_id   TEXT NOT NULL,
+		project       TEXT NOT NULL,
+		trigger_event TEXT,
+		trigger_meta  TEXT DEFAULT '{}',
+		status        TEXT DEFAULT 'running',
+		started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+		finished_at   TEXT,
+		error         TEXT
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow ON workflow_runs(workflow_id)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_workflow_runs_project ON workflow_runs(project, started_at)`)
+
+	// Workflow node runs (per-node execution within a run)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS workflow_node_runs (
+		id          TEXT PRIMARY KEY,
+		run_id      TEXT NOT NULL,
+		node_id     TEXT NOT NULL,
+		node_type   TEXT NOT NULL,
+		status      TEXT DEFAULT 'pending',
+		input       TEXT DEFAULT '{}',
+		output      TEXT DEFAULT '{}',
+		started_at  TEXT,
+		finished_at TEXT,
+		error       TEXT
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_workflow_node_runs_run ON workflow_node_runs(run_id)`)
+
+	// Custom events (user-defined event types with meta field schemas)
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS custom_events (
+		id          TEXT PRIMARY KEY,
+		project     TEXT NOT NULL,
+		name        TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		meta_fields TEXT DEFAULT '[]',
+		icon        TEXT DEFAULT '',
+		created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(project, name)
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_custom_events_project ON custom_events(project)`)
+
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS cycles (
+		id            TEXT PRIMARY KEY,
+		project       TEXT NOT NULL,
+		name          TEXT NOT NULL,
+		prompt        TEXT NOT NULL DEFAULT '',
+		ttl           INTEGER NOT NULL DEFAULT 10,
+		created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(project, name)
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_cycles_project ON cycles(project)`)
+
 	// Lowercase all agent names for case-insensitive matching
 	migrateLowercaseAgentNames(conn)
 

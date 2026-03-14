@@ -61,6 +61,12 @@ func (d *DB) ListAgentQuotas(project string) ([]models.AgentQuota, error) {
 	return result, rows.Err()
 }
 
+// DeleteQuota removes a quota for an agent.
+func (d *DB) DeleteQuota(project, agentName string) error {
+	_, err := d.conn.Exec("DELETE FROM agent_quotas WHERE project = ? AND agent_name = ?", project, agentName)
+	return err
+}
+
 // CheckQuota checks if an agent has exceeded a specific quota type.
 // Returns (allowed, used, limit). If no quota is set, returns (true, 0, 0).
 func (d *DB) CheckQuota(project, agentName, quotaType string) (allowed bool, used, limit int64) {

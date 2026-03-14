@@ -930,6 +930,19 @@ API endpoints: `GET /api/token-usage` (per-project), `/api/token-usage/project` 
 
 <br>
 
+## &#x1F4C4; Research Paper
+
+The architecture behind wrai.th is formalized in our paper:
+
+> **Agentic Memory Atomicity: A Transactional Memory Architecture for Ephemeral AI Agent Systems**
+> Loïc Mancino & Jérôme Chincarini — Synergix Labs, March 2026
+>
+> *81% boot token reduction, 80% knowledge convergence in 30 spawns, sub-linear cost scaling.*
+
+[Read the paper (PDF)](notebooks/paper.pdf)
+
+<br>
+
 ## &#x1F91D; Contributing
 
 Opinionated tooling built for a specific workflow. Moves fast.

@@ -13,6 +13,12 @@ type VaultDoc struct {
 	IndexedAt string `json:"indexed_at"`
 }
 
+// VaultDocRef is a lightweight reference (no content) for prompt index injection.
+type VaultDocRef struct {
+	Path  string `json:"path"`
+	Title string `json:"title"`
+}
+
 type VaultSearchResult struct {
 	Path    string  `json:"path"`
 	Title   string  `json:"title"`
