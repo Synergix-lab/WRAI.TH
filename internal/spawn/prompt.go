@@ -162,27 +162,29 @@ func BuildSpawnContext(database *db.DB, project, profileSlug, cycleName string, 
 		}
 	}
 
-	// 3b. Vault docs
-	if mode == ModeInteractive {
-		// Interactive: load full content from profile's vault_paths
-		if profile.VaultPaths != "" && profile.VaultPaths != "[]" {
-			var paths []string
-			if err := json.Unmarshal([]byte(profile.VaultPaths), &paths); err == nil {
-				resolved := make([]string, len(paths))
-				for i, p := range paths {
-					resolved[i] = strings.ReplaceAll(p, "{slug}", profileSlug)
-				}
-				docs, err := database.GetVaultDocsByPaths(project, resolved, 0)
-				if err == nil {
-					for _, d := range docs {
-						ctx.Knowledge.Conventions = append(ctx.Knowledge.Conventions,
-							fmt.Sprintf("--- %s ---\n%s", d.Path, d.Content))
-					}
+	// 3b. Vault docs — explicit vault_paths from the profile are always injected
+	// (both interactive and headless modes). This is the documented promise:
+	// "Profiles with vault_paths auto-inject those docs at boot".
+	var explicitVaultPaths []string
+	if profile.VaultPaths != "" && profile.VaultPaths != "[]" {
+		_ = json.Unmarshal([]byte(profile.VaultPaths), &explicitVaultPaths)
+		if len(explicitVaultPaths) > 0 {
+			resolved := make([]string, len(explicitVaultPaths))
+			for i, p := range explicitVaultPaths {
+				resolved[i] = strings.ReplaceAll(p, "{slug}", profileSlug)
+			}
+			docs, err := database.GetVaultDocsByPaths(project, resolved, 0)
+			if err == nil {
+				for _, d := range docs {
+					ctx.Knowledge.Conventions = append(ctx.Knowledge.Conventions,
+						fmt.Sprintf("--- %s ---\n%s", d.Path, d.Content))
 				}
 			}
 		}
-	} else {
-		// Headless: FTS search vault for task/cycle-relevant docs, return paths only
+	}
+
+	// In headless mode, also add FTS hits for task-relevant docs (path+title only)
+	if mode == ModeHeadless {
 		vaultQuery := ""
 		if ctx.Task != nil {
 			vaultQuery = ctx.Task.Title
@@ -195,6 +197,17 @@ func BuildSpawnContext(database *db.DB, project, profileSlug, cycleName string, 
 			results, err := database.SearchVault(project, vaultQuery, nil, 5)
 			if err == nil {
 				for _, r := range results {
+					// Skip docs already injected as full content above
+					already := false
+					for _, p := range explicitVaultPaths {
+						if strings.ReplaceAll(p, "{slug}", profileSlug) == r.Path {
+							already = true
+							break
+						}
+					}
+					if already {
+						continue
+					}
 					ctx.Knowledge.Conventions = append(ctx.Knowledge.Conventions,
 						fmt.Sprintf("`%s` — %s", r.Path, r.Title))
 				}
