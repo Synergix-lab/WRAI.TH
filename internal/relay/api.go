@@ -319,9 +319,13 @@ func (r *Relay) apiGetProjects(w http.ResponseWriter) {
 
 func (r *Relay) apiHealth(w http.ResponseWriter) {
 	stats := r.DB.GetHealthStats()
+	v := r.Version
+	if v == "" {
+		v = "dev"
+	}
 	writeJSON(w, map[string]any{
 		"status":  "ok",
-		"version": "0.5.0",
+		"version": v,
 		"uptime":  time.Since(r.StartedAt).String(),
 		"started": r.StartedAt.Format(time.RFC3339),
 		"db":      stats,

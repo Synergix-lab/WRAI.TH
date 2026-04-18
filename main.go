@@ -51,6 +51,7 @@ func startServer() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	cfg := config.Load()
+	cfg.Version = Version
 
 	database, err := db.New()
 	if err != nil {
@@ -75,6 +76,7 @@ func startServer() {
 	defer vaultWatcher.Stop()
 
 	r := relay.New(database, ingester, vaultWatcher, cfg)
+	r.Version = Version
 
 	// Start scheduler and load persisted schedules
 	if r.SpawnMgr != nil {

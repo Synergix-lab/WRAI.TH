@@ -18,6 +18,10 @@ type Config struct {
 	ClaudeBinary string // RELAY_CLAUDE_BINARY: path to claude CLI (default: "claude")
 	LocksDir     string // RELAY_LOCKS_DIR: directory for flock files (default: "/tmp/")
 	MaxPoolSize  int    // RELAY_MAX_POOL_SIZE: global max concurrent spawned children (default: 10)
+
+	// Version is the build tag (from main.Version). Surfaced in /api/health
+	// and MCP server info. Set by the caller before relay.New.
+	Version string
 }
 
 // Load reads configuration from environment variables with safe defaults.

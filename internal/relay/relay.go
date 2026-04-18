@@ -37,15 +37,23 @@ type Relay struct {
 	Handlers       *Handlers
 	WorkflowEngine *workflow.Engine
 	Config         config.Config
-	httpServer     *http.Server
-	StartedAt      time.Time
+	// Version is the build tag, injected from main.Version.
+	// Defaults to "dev" when built without ldflags.
+	Version    string
+	httpServer *http.Server
+	StartedAt  time.Time
 }
 
 // New creates a fully wired Relay with all tools registered.
+// Caller should set r.Version after construction if known (injected from main.Version).
 func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher, cfg config.Config) *Relay {
+	version := cfg.Version
+	if version == "" {
+		version = "dev"
+	}
 	mcpSrv := server.NewMCPServer(
 		"wrai.th",
-		"0.5.0",
+		version,
 		server.WithToolCapabilities(false),
 		server.WithLogging(),
 		server.WithRecovery(),
