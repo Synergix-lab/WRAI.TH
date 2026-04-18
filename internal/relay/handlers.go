@@ -346,9 +346,9 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 	// Fire triggers for high-priority messages (P0/P1)
 	if priority == "P0" || priority == "P1" {
 		msgMeta := map[string]string{"priority": priority, "from": from, "to": to, "subject": subject, "message_id": msg.ID}
-		go h.fireTriggers(project, "message_received", msgMeta)
+		go h.fireTriggers(project, "message.received", msgMeta)
 		if priority == "P0" {
-			go h.fireTriggers(project, "signal:interrupt", msgMeta)
+			go h.fireTriggers(project, "signal.interrupt", msgMeta)
 		}
 	}
 
@@ -1261,7 +1261,7 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 	h.events.Emit(MCPEvent{Type: "task", Action: "dispatch", Agent: agent, Project: project, Target: profile, Label: title})
 
 	// Fire triggers for task_pending
-	go h.fireTriggers(project, "task_pending", map[string]string{
+	go h.fireTriggers(project, "task.dispatched", map[string]string{
 		"profile": profile, "priority": priority, "task_id": task.ID, "dispatched_by": agent, "title": title,
 	})
 
@@ -1351,7 +1351,7 @@ func (h *Handlers) HandleCompleteTask(ctx context.Context, req mcp.CallToolReque
 	h.events.Emit(MCPEvent{Type: "task", Action: "complete", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
 
 	// Fire triggers for task_completed
-	go h.fireTriggers(project, "task_completed", map[string]string{
+	go h.fireTriggers(project, "task.completed", map[string]string{
 		"task_id": task.ID, "profile": task.ProfileSlug, "completed_by": agent, "title": task.Title,
 	})
 
@@ -1412,8 +1412,8 @@ func (h *Handlers) HandleBlockTask(ctx context.Context, req mcp.CallToolRequest)
 	if reason != nil {
 		blockMeta["reason"] = *reason
 	}
-	go h.fireTriggers(project, "task_blocked", blockMeta)
-	go h.fireTriggers(project, "signal:alert", blockMeta)
+	go h.fireTriggers(project, "task.blocked", blockMeta)
+	go h.fireTriggers(project, "signal.alert", blockMeta)
 
 	// Notify dispatcher — blocked is critical
 	reasonStr := ""

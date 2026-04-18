@@ -6,18 +6,60 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"agent-relay/internal/db"
 )
+
+// canonicalEvent returns the canonical dot-notation form of an event name.
+// Both dot ("task.dispatched") and legacy underscore ("task_pending") forms
+// are accepted on input; internally we always emit dot notation.
+// This keeps triggers registered with either form working after the switch.
+var eventAliases = map[string]string{
+	// underscore (historical handler-side names) → canonical dot
+	"task_pending":     "task.dispatched",
+	"task_completed":   "task.completed",
+	"task_blocked":     "task.blocked",
+	"task_resumed":     "task.resumed",
+	"message_received": "message.received",
+	"signal:interrupt": "signal.interrupt",
+	"signal:alert":     "signal.alert",
+}
+
+func canonicalEvent(event string) string {
+	if c, ok := eventAliases[event]; ok {
+		return c
+	}
+	return event
+}
+
+// eventMatchSet returns all event-name variants that should match the canonical form.
+// Triggers registered with either dot or underscore notation fire for the same event.
+func eventMatchSet(canonical string) []string {
+	set := []string{canonical}
+	for alias, c := range eventAliases {
+		if c == canonical && alias != canonical {
+			set = append(set, alias)
+		}
+	}
+	return set
+}
 
 // fireTriggers queries matching triggers for the given project/event and spawns children.
 // Also fires any workflow DAGs that have matching trigger:event nodes.
 // Always called as a goroutine: go h.fireTriggers(project, event, meta)
 func (h *Handlers) fireTriggers(project, event string, meta map[string]string) {
+	event = canonicalEvent(event)
+
 	// Fire workflow DAGs that match this event
 	if h.wfEngine != nil {
 		h.wfEngine.FireWorkflows(project, event, meta)
 	}
 
-	triggers := h.db.ListTriggers(project, event)
+	// Accept triggers registered under any alias for this canonical event
+	var triggers []db.Trigger
+	for _, name := range eventMatchSet(event) {
+		triggers = append(triggers, h.db.ListTriggers(project, name)...)
+	}
 	if len(triggers) == 0 {
 		return
 	}
@@ -149,7 +191,12 @@ type webhookSkipped struct {
 
 // fireTriggersSync is like fireTriggers but returns results (for webhook endpoint).
 func (h *Handlers) fireTriggersSync(project, event string, meta map[string]string) (fires []webhookResult, skipped []webhookSkipped) {
-	triggers := h.db.ListTriggers(project, event)
+	event = canonicalEvent(event)
+
+	var triggers []db.Trigger
+	for _, name := range eventMatchSet(event) {
+		triggers = append(triggers, h.db.ListTriggers(project, name)...)
+	}
 	if len(triggers) == 0 {
 		return
 	}
