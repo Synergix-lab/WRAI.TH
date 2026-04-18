@@ -896,7 +896,7 @@ func TestAPIWebhook(t *testing.T) {
 	r := testRelay(t)
 
 	// Create a trigger that matches "pr_opened" events
-	_, _ = r.DB.UpsertTrigger("myproj", "pr_opened", `{}`, "reviewer", "review", "10m")
+	_, _ = r.DB.UpsertTrigger("myproj", "pr_opened", `{}`, "reviewer", "review", "10m", nil)
 
 	// Fire webhook — no spawn manager so it should report "spawn_unavailable"
 	w := doAPI(r, "POST", "/webhooks/myproj/pr_opened", `{"author":"alice","branch":"feature-x"}`)
@@ -919,7 +919,7 @@ func TestAPIWebhookWithMatchRules(t *testing.T) {
 	r := testRelay(t)
 
 	// Trigger only fires when author=alice
-	_, _ = r.DB.UpsertTrigger("proj", "pr_opened", `{"author":"alice"}`, "reviewer", "review", "10m")
+	_, _ = r.DB.UpsertTrigger("proj", "pr_opened", `{"author":"alice"}`, "reviewer", "review", "10m", nil)
 
 	// Should match
 	w := doAPI(r, "POST", "/webhooks/proj/pr_opened", `{"author":"alice"}`)
@@ -1210,8 +1210,10 @@ func TestAPIQuotaCRUD(t *testing.T) {
 		t.Fatalf("set quota: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	data := decodeJSON(t, w)
-	if data["status"] != "updated" {
-		t.Errorf("expected status=updated, got %v", data["status"])
+	// PUT now echoes the full quota object (was {status:"updated"}).
+	// Verify it contains the limits we just set.
+	if data["max_messages_per_hour"].(float64) != 100 {
+		t.Errorf("expected echoed max_messages_per_hour=100, got %v", data["max_messages_per_hour"])
 	}
 
 	// Get agent quota
@@ -1440,7 +1442,7 @@ func TestAPIWebhookFiresAndRecordsHistory(t *testing.T) {
 	r := testRelay(t)
 
 	// Create trigger for "deploy" event
-	_, _ = r.DB.UpsertTrigger("proj", "deploy", `{}`, "deployer", "deploy-cycle", "10m")
+	_, _ = r.DB.UpsertTrigger("proj", "deploy", `{}`, "deployer", "deploy-cycle", "10m", nil)
 
 	// Fire via webhook
 	doAPI(r, "POST", "/webhooks/proj/deploy", `{"env":"production"}`)
