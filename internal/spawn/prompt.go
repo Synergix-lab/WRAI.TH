@@ -68,6 +68,40 @@ type ContextRules struct {
 	ExitPrompt string `json:"exit_prompt,omitempty"`
 }
 
+// resolveReportsTo picks the best default 'reports_to' for a newly-spawned
+// child. It tries, in order:
+//  1. The pre-registered template agent (name == profileSlug) — caller
+//     explicitly set a manager via register_agent(reports_to=...)
+//  2. The sole executive of the project — common case: 'everyone reports to
+//     the CTO'. Only applied if exactly one exec exists; with two or more,
+//     we skip to avoid arbitrary picks.
+//  3. Empty — child becomes a free-floating node (orphan) in the canvas.
+func resolveReportsTo(database *db.DB, project, profileSlug string) string {
+	// 1. Template agent
+	if agents, err := database.GetAgentsByProfile(project, profileSlug); err == nil {
+		for _, a := range agents {
+			if a.Name == profileSlug && a.ReportsTo != nil && *a.ReportsTo != "" {
+				return *a.ReportsTo
+			}
+		}
+	}
+	// 2. Sole executive fallback
+	all, err := database.ListAgents(project)
+	if err == nil {
+		var execs []string
+		for _, a := range all {
+			if a.IsExecutive && a.Status == "active" && a.Name != profileSlug {
+				execs = append(execs, a.Name)
+			}
+		}
+		if len(execs) == 1 {
+			return execs[0]
+		}
+	}
+	// 3. Orphan
+	return ""
+}
+
 // SpawnMode controls how much context is injected into the agent prompt.
 type SpawnMode string
 
@@ -108,21 +142,18 @@ func BuildSpawnContext(database *db.DB, project, profileSlug, cycleName string, 
 		Rules:     &ContextRules{},
 	}
 
-	// Inherit reports_to from the pre-registered template agent matching this
-	// profile (if any). Without this, spawned children register themselves as
-	// orphans — visible as free-floating sprites on the colony canvas instead
-	// of under their parent in the hierarchy.
-	if agents, err := database.GetAgentsByProfile(project, profileSlug); err == nil {
-		for _, a := range agents {
-			// Skip other already-spawned children (names like "<profile>-child-<id>")
-			if a.Name != profileSlug {
-				continue
-			}
-			if a.ReportsTo != nil && *a.ReportsTo != "" {
-				ctx.Identity.ReportsTo = *a.ReportsTo
-				break
-			}
-		}
+	// Resolve reports_to with a fallback chain so spawned children never end
+	// up as free-floating orphans on the canvas:
+	//   1. Template agent with name == profile_slug (explicit reports_to)
+	//   2. Sole executive of the project (implicit — 'everyone reports to the
+	//      CTO unless configured otherwise')
+	//   3. empty (orphan — last resort)
+	ctx.Identity.ReportsTo = resolveReportsTo(database, project, profileSlug)
+
+	// Profile-level exit_prompt override — replaces the default boilerplate
+	// that otherwise forces all spawns to set_memory+exit.
+	if profile.ExitPrompt != "" {
+		ctx.Rules.ExitPrompt = profile.ExitPrompt
 	}
 
 	// Profile-level exit_prompt override — replaces the default boilerplate

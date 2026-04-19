@@ -274,7 +274,107 @@ func (m *Manager) SpawnWithContext(project, profileSlug, cycleName, taskID strin
 		}
 	}
 
-	return m.Spawn("relay-os", project, profileSlug, prompt, ttl, "")
+	// Use the Agent-OS path: the prompt is already fully assembled by
+	// FormatPrompt (identity + reports_to + exit_prompt etc). We must NOT
+	// wrap it again in the legacy boot header inside Spawn(), which would
+	// override reports_to and force the child into the '<profile>-child-<id>'
+	// naming pattern.
+	allowedTools := ""
+	if profile != nil {
+		allowedTools = profile.AllowedTools
+	}
+	return m.spawnAssembled(project, profileSlug, prompt, ttl, allowedTools)
+}
+
+// spawnAssembled is like Spawn() but skips the legacy boot-header wrapping.
+// Intended for prompts already built via FormatPrompt(ctx) — they contain
+// a complete identity+boot section with the canonical register_agent call.
+func (m *Manager) spawnAssembled(project, profile, assembledPrompt, ttlStr, allowedTools string) (string, error) {
+	m.mu.Lock()
+	activeCount := 0
+	for _, c := range m.children {
+		if c.Project == project {
+			activeCount++
+		}
+	}
+	if activeCount >= m.maxPool {
+		m.mu.Unlock()
+		return "", fmt.Errorf("pool full: %d/%d active children in project %s", activeCount, m.maxPool, project)
+	}
+
+	childID := uuid.New().String()
+	ctx, cancel := context.WithCancel(context.Background())
+	parentName := "relay-os"
+	child := &ChildState{
+		ID:        childID,
+		Parent:    parentName,
+		Project:   project,
+		Profile:   profile,
+		Prompt:    assembledPrompt,
+		StartedAt: time.Now().UTC(),
+		Cancel:    cancel,
+	}
+	m.children[childID] = child
+	m.mu.Unlock()
+
+	m.db.InsertSpawnChild(childID, parentName, project, profile, assembledPrompt)
+	ttl := scheduler.ParseTTL(ttlStr)
+
+	go func() {
+		m.live.Start(childID, "spawn")
+		params := SpawnParams{
+			Prompt:       assembledPrompt,
+			TTL:          ttl,
+			AllowedTools: allowedTools,
+			Streaming:    true,
+		}
+		result := m.executor.RunWithLive(ctx, params, m.live.Writer(childID))
+		m.live.Finish(childID)
+
+		metric := CycleMetric{
+			Agent:               parentName,
+			Project:             project,
+			Cycle:               "spawn:" + profile,
+			Duration:            result.Duration,
+			Success:             result.ExitCode == 0,
+			ExitCode:            result.ExitCode,
+			Timestamp:           time.Now(),
+			InputTokens:         result.Tokens.InputTokens,
+			OutputTokens:        result.Tokens.OutputTokens,
+			CacheReadTokens:     result.Tokens.CacheReadTokens,
+			CacheCreationTokens: result.Tokens.CacheCreationTokens,
+		}
+		errMsg := ""
+		if result.Err != nil {
+			errMsg = result.Err.Error()
+			metric.Error = errMsg
+		}
+		m.metrics.Record(metric)
+		m.db.UpdateSpawnChild(childID, "finished", result.ExitCode, errMsg)
+		m.db.RecordCycleHistory(parentName, project, "spawn:"+profile,
+			result.Duration.Milliseconds(), result.ExitCode == 0, result.ExitCode, errMsg,
+			result.Tokens.InputTokens, result.Tokens.OutputTokens,
+			result.Tokens.CacheReadTokens, result.Tokens.CacheCreationTokens)
+
+		m.mu.Lock()
+		delete(m.children, childID)
+		m.mu.Unlock()
+
+		m.logger.Info("child finished (assembled path)",
+			"child_id", childID,
+			"profile", profile,
+			"exit_code", result.ExitCode,
+			"duration", result.Duration,
+		)
+	}()
+
+	m.logger.Info("child spawned (assembled)",
+		"child_id", childID,
+		"profile", profile,
+		"project", project,
+	)
+
+	return childID, nil
 }
 
 // --- Schedule management ---
