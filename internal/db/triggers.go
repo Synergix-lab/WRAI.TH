@@ -137,6 +137,31 @@ func (d *DB) ToggleTrigger(id string, enabled bool) {
 	_, _ = d.conn.Exec("UPDATE triggers SET enabled = ?, updated_at = ? WHERE id = ?", e, now, id)
 }
 
+// ClaimTriggerFire atomically reserves a fire slot for the given trigger.
+// Returns true if the caller wins the cooldown race (last_fired_at is
+// updated to now), false if another goroutine already claimed the slot
+// within the cooldown window.
+//
+// Used by the dispatcher to prevent the burst-race where N concurrent
+// goroutines all pass a stale in-memory cooldown check and fire N times.
+func (d *DB) ClaimTriggerFire(triggerID string, cooldownSeconds int) bool {
+	now := time.Now().UTC()
+	nowStr := now.Format(memoryTimeFmt)
+	threshold := now.Add(-time.Duration(cooldownSeconds) * time.Second).Format(memoryTimeFmt)
+	// Only update if last_fired_at is NULL or older than the cooldown window.
+	res, err := d.conn.Exec(
+		`UPDATE triggers SET last_fired_at = ?
+		 WHERE id = ?
+		   AND (last_fired_at IS NULL OR last_fired_at = '' OR last_fired_at < ?)`,
+		nowStr, triggerID, threshold,
+	)
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
 // RecordTriggerFire logs a trigger firing event and updates last_fired_at.
 func (d *DB) RecordTriggerFire(triggerID, project, event, childID string, err error) {
 	now := time.Now().UTC().Format(memoryTimeFmt)

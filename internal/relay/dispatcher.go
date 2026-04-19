@@ -70,17 +70,14 @@ func (h *Handlers) fireTriggers(project, event string, meta map[string]string) {
 			continue
 		}
 
-		// Cooldown check
-		if t.LastFiredAt != "" {
-			if lastFired, err := time.Parse("2006-01-02T15:04:05Z", t.LastFiredAt); err == nil {
-				cooldown := time.Duration(t.CooldownSeconds) * time.Second
-				if remaining := cooldown - time.Since(lastFired); remaining > 0 {
-					msg := fmt.Sprintf("cooldown (%s remaining)", remaining.Truncate(time.Second))
-					log.Printf("[dispatcher] trigger %s skipped — %s", t.ID, msg)
-					h.db.RecordTriggerFire(t.ID, project, event, "", fmt.Errorf("%s", msg))
-					continue
-				}
-			}
+		// Atomic cooldown claim — only one concurrent goroutine wins.
+		// The DB-level UPDATE ... WHERE last_fired_at < threshold handles
+		// the race that pure in-memory checks can't.
+		if !h.db.ClaimTriggerFire(t.ID, t.CooldownSeconds) {
+			msg := fmt.Sprintf("cooldown (%ds)", t.CooldownSeconds)
+			log.Printf("[dispatcher] trigger %s skipped — %s", t.ID, msg)
+			h.db.RecordTriggerFire(t.ID, project, event, "", fmt.Errorf("%s", msg))
+			continue
 		}
 
 		// Spawn via SpawnWithContext if spawn manager is available
@@ -97,7 +94,8 @@ func (h *Handlers) fireTriggers(project, event string, meta map[string]string) {
 			log.Printf("[dispatcher] trigger %s matched but spawn manager not available", t.ID)
 		}
 
-		// Record the fire
+		// Record the fire (note: RecordTriggerFire also bumps last_fired_at;
+		// ClaimTriggerFire already did it atomically, so this is idempotent)
 		h.db.RecordTriggerFire(t.ID, project, event, childID, spawnErr)
 
 		if spawnErr != nil {
@@ -210,15 +208,11 @@ func (h *Handlers) fireTriggersSync(project, event string, meta map[string]strin
 			continue
 		}
 
-		// Cooldown check
-		if t.LastFiredAt != "" {
-			if lastFired, err := time.Parse("2006-01-02T15:04:05Z", t.LastFiredAt); err == nil {
-				cooldown := time.Duration(t.CooldownSeconds) * time.Second
-				if time.Since(lastFired) < cooldown {
-					skipped = append(skipped, webhookSkipped{TriggerID: t.ID, Reason: "cooldown"})
-					continue
-				}
-			}
+		// Atomic cooldown claim — only one concurrent goroutine wins.
+		if !h.db.ClaimTriggerFire(t.ID, t.CooldownSeconds) {
+			skipped = append(skipped, webhookSkipped{TriggerID: t.ID, Reason: "cooldown"})
+			h.db.RecordTriggerFire(t.ID, project, event, "", fmt.Errorf("cooldown (%ds)", t.CooldownSeconds))
+			continue
 		}
 
 		var childID string
