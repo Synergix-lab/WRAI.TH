@@ -241,10 +241,24 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 	conversationID := optionalString(req.GetString("conversation_id", ""))
 	priority := mapPriority(req.GetString("priority", "P2"))
 	ttlSeconds := req.GetInt("ttl_seconds", 14400)
+	targetProject := strings.TrimSpace(req.GetString("target_project", ""))
 
 	// Quota check: messages
 	if qErr := h.db.CheckQuotaError(project, from, "messages"); qErr != "" {
 		return mcp.NewToolResultError(qErr), nil
+	}
+
+	// Cross-project DM: delivered to a peer executive in a different project.
+	// MVP scope: direct messages only (no broadcast, no team, no conversation).
+	// Both sender and recipient must be registered with is_executive=true.
+	if targetProject != "" && targetProject != project {
+		if to == "" {
+			return mcp.NewToolResultError("target_project requires a 'to' agent name"), nil
+		}
+		if to == "*" || strings.HasPrefix(to, "team:") || conversationID != nil {
+			return mcp.NewToolResultError("cross-project messaging is limited to direct DMs (no broadcast, no team:, no conversation_id)"), nil
+		}
+		return h.sendCrossProject(ctx, project, from, targetProject, to, msgType, subject, content, metadata, replyTo, priority, ttlSeconds)
 	}
 
 	// Support "to": "conversation:<id>" shorthand
@@ -368,6 +382,70 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 	return h.resultJSONTracked(project, from, "send_message", msg)
 }
 
+// sendCrossProject delivers a direct message to an agent in a different project.
+// Both sender and recipient must be is_executive=true — this is the MVP guardrail
+// for peer-to-peer cross-project DM (e.g. two CTOs coordinating between colonies).
+// The message is inserted with project=targetProject (destination scope) so it
+// appears in the recipient's inbox naturally. metadata.source_project and
+// metadata.source_agent preserve the origin for UI rendering and reply routing.
+func (h *Handlers) sendCrossProject(ctx context.Context, srcProject, from, dstProject, to, msgType, subject, content, callerMetadata string, replyTo *string, priority string, ttlSeconds int) (*mcp.CallToolResult, error) {
+	// Validate sender exists and is executive
+	sender, err := h.db.GetAgent(srcProject, from)
+	if err != nil || sender == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("sender '%s' not found in project '%s'", from, srcProject)), nil
+	}
+	if !sender.IsExecutive {
+		return mcp.NewToolResultError("cross-project messaging requires sender to be is_executive=true"), nil
+	}
+
+	// Validate target exists and is executive
+	target, err := h.db.GetAgent(dstProject, to)
+	if err != nil || target == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("target '%s' not found in project '%s'", to, dstProject)), nil
+	}
+	if !target.IsExecutive {
+		return mcp.NewToolResultError(fmt.Sprintf("cross-project messaging requires target '%s' in project '%s' to be is_executive=true", to, dstProject)), nil
+	}
+
+	// Merge caller-provided metadata with source tracking fields
+	meta := map[string]any{}
+	if callerMetadata != "" && callerMetadata != "{}" {
+		_ = json.Unmarshal([]byte(callerMetadata), &meta)
+	}
+	meta["source_project"] = srcProject
+	meta["source_agent"] = from
+	meta["cross_project"] = true
+	metaBytes, _ := json.Marshal(meta)
+
+	// Insert the message in the DESTINATION project scope — this is what makes
+	// it visible in the recipient's get_inbox(project=dstProject) without any
+	// special routing in the read path.
+	msg, err := h.db.InsertMessage(dstProject, from, to, msgType, subject, content, string(metaBytes), priority, ttlSeconds, replyTo, nil)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to insert cross-project message: %v", err)), nil
+	}
+	// Delivery for the single recipient in the destination project
+	if err := h.db.CreateDeliveries(msg.ID, dstProject, []string{to}); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("delivery failed: %v", err)), nil
+	}
+
+	// Push notification if the target has an open session
+	h.registry.Notify(dstProject, to, from, subject, msg.ID)
+
+	// Visible event — scoped to SENDER project so the sender sees it in their
+	// activity feed; target's inbox naturally surfaces the message.
+	h.events.Emit(MCPEvent{
+		Type:    "message",
+		Action:  "cross_project",
+		Agent:   from,
+		Project: srcProject,
+		Target:  fmt.Sprintf("%s@%s", to, dstProject),
+		Label:   subject,
+	})
+
+	return h.resultJSONTracked(srcProject, from, "send_message", msg)
+}
+
 func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	project := resolveProject(ctx, req)
 	agent := resolveAgent(ctx, req)
@@ -453,6 +531,22 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 		}
 		if m.DeliveryState != nil {
 			entry["delivery_state"] = *m.DeliveryState
+		}
+		// Surface cross-project origin when present so the caller (and UI)
+		// can render "from X@colony-b" instead of a bare sender name.
+		if m.Metadata != "" && m.Metadata != "{}" {
+			var meta map[string]any
+			if err := json.Unmarshal([]byte(m.Metadata), &meta); err == nil {
+				if sp, ok := meta["source_project"].(string); ok && sp != "" {
+					entry["source_project"] = sp
+				}
+				if sa, ok := meta["source_agent"].(string); ok && sa != "" {
+					entry["source_agent"] = sa
+				}
+				if cp, ok := meta["cross_project"].(bool); ok && cp {
+					entry["cross_project"] = true
+				}
+			}
 		}
 		formatted[i] = entry
 	}

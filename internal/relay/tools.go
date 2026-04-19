@@ -56,6 +56,7 @@ func sendMessageTool() mcp.Tool {
 			mcp.Enum("P0", "P1", "P2", "P3", "interrupt", "steering", "advisory", "info"),
 		),
 		mcp.WithNumber("ttl_seconds", mcp.Description("Time-to-live in seconds (default: 14400 = 4h, 0 = never expires). Expired messages are excluded from inbox.")),
+		mcp.WithString("target_project", mcp.Description("Cross-project DM target. If set, the message is delivered to the agent of that name in target_project. Both sender and recipient must be registered with is_executive=true. The message lives in the target project scope; metadata records the source.")),
 	)
 }
 
