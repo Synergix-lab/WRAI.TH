@@ -125,7 +125,7 @@ func (d *DB) GetSkillByName(project, name string) (*models.Skill, error) {
 func (d *DB) FindProfilesBySkill(project, skillName string) ([]models.Profile, error) {
 	rows, err := d.ro().Query(
 		`SELECT p.id, p.slug, p.name, p.role, p.context_pack, p.soul_keys, p.skills, p.vault_paths,
-		 p.allowed_tools, p.pool_size, p.project, p.org_id, p.created_at, p.updated_at
+		 p.allowed_tools, p.pool_size, COALESCE(p.exit_prompt, ''), p.project, p.org_id, p.created_at, p.updated_at
 		 FROM profiles p
 		 JOIN profile_skills ps ON ps.profile_id = p.id
 		 JOIN skills s ON s.id = ps.skill_id

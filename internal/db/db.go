@@ -352,6 +352,7 @@ func migrate(conn *sql.DB) error {
 		"vault_paths":   "TEXT NOT NULL DEFAULT '[]'",
 		"allowed_tools": "TEXT NOT NULL DEFAULT '[]'",
 		"pool_size":     "INTEGER NOT NULL DEFAULT 3",
+		"exit_prompt":   "TEXT NOT NULL DEFAULT ''",
 	})
 
 	// Tasks

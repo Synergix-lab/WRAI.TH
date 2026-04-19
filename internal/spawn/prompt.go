@@ -63,6 +63,9 @@ type ContextMessage struct {
 
 type ContextRules struct {
 	Cycle string `json:"cycle,omitempty"`
+	// ExitPrompt overrides the default "when done, set_memory then exit"
+	// boilerplate appended at the end of the spawn prompt.
+	ExitPrompt string `json:"exit_prompt,omitempty"`
 }
 
 // SpawnMode controls how much context is injected into the agent prompt.
@@ -103,6 +106,29 @@ func BuildSpawnContext(database *db.DB, project, profileSlug, cycleName string, 
 		},
 		Knowledge: &ContextKnowledge{},
 		Rules:     &ContextRules{},
+	}
+
+	// Inherit reports_to from the pre-registered template agent matching this
+	// profile (if any). Without this, spawned children register themselves as
+	// orphans — visible as free-floating sprites on the colony canvas instead
+	// of under their parent in the hierarchy.
+	if agents, err := database.GetAgentsByProfile(project, profileSlug); err == nil {
+		for _, a := range agents {
+			// Skip other already-spawned children (names like "<profile>-child-<id>")
+			if a.Name != profileSlug {
+				continue
+			}
+			if a.ReportsTo != nil && *a.ReportsTo != "" {
+				ctx.Identity.ReportsTo = *a.ReportsTo
+				break
+			}
+		}
+	}
+
+	// Profile-level exit_prompt override — replaces the default boilerplate
+	// that otherwise forces all spawns to set_memory+exit.
+	if profile.ExitPrompt != "" {
+		ctx.Rules.ExitPrompt = profile.ExitPrompt
 	}
 
 	// 2. TASK — load if specified
@@ -395,7 +421,15 @@ func FormatPrompt(ctx *SpawnContext) string {
 		fmt.Fprintf(&b, "\nPending tasks: %d | Blocked tasks: %d\n\n", ctx.Team.PendingTasks, ctx.Team.BlockedTasks)
 	}
 
-	b.WriteString("When done: persist what you learned via `set_memory`, then exit.\n")
+	// Exit behavior — profile override if set, otherwise the safe default.
+	if ctx.Rules != nil && ctx.Rules.ExitPrompt != "" {
+		b.WriteString(ctx.Rules.ExitPrompt)
+		if !strings.HasSuffix(ctx.Rules.ExitPrompt, "\n") {
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("When done: persist what you learned via `set_memory`, then exit.\n")
+	}
 
 	return b.String()
 }

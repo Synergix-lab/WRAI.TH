@@ -911,6 +911,7 @@ func (r *Relay) apiCreateProfile(w http.ResponseWriter, req *http.Request) {
 		VaultPaths   string `json:"vault_paths"`
 		AllowedTools string `json:"allowed_tools"`
 		PoolSize     int    `json:"pool_size"`
+		ExitPrompt   string `json:"exit_prompt"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		apiError(w, http.StatusBadRequest, "invalid JSON", err)
@@ -930,6 +931,9 @@ func (r *Relay) apiCreateProfile(w http.ResponseWriter, req *http.Request) {
 	}
 	if body.PoolSize > 0 {
 		opts = append(opts, db.WithPoolSize(body.PoolSize))
+	}
+	if body.ExitPrompt != "" {
+		opts = append(opts, db.WithExitPrompt(body.ExitPrompt))
 	}
 
 	profile, err := r.DB.RegisterProfile(body.Project, body.Slug, body.Name, body.Role, body.ContextPack, body.SoulKeys, body.Skills, body.VaultPaths, opts...)
@@ -975,6 +979,7 @@ func (r *Relay) apiUpdateProfile(w http.ResponseWriter, req *http.Request, path 
 	vaultPaths := existing.VaultPaths
 	allowedTools := existing.AllowedTools
 	poolSize := existing.PoolSize
+	exitPrompt := existing.ExitPrompt
 
 	if v, ok := raw["name"].(string); ok {
 		name = v
@@ -1000,6 +1005,9 @@ func (r *Relay) apiUpdateProfile(w http.ResponseWriter, req *http.Request, path 
 	if v, ok := raw["pool_size"].(float64); ok && int(v) > 0 {
 		poolSize = int(v)
 	}
+	if v, ok := raw["exit_prompt"].(string); ok {
+		exitPrompt = v
+	}
 
 	var opts []db.ProfileOption
 	if allowedTools != "" {
@@ -1007,6 +1015,9 @@ func (r *Relay) apiUpdateProfile(w http.ResponseWriter, req *http.Request, path 
 	}
 	if poolSize > 0 {
 		opts = append(opts, db.WithPoolSize(poolSize))
+	}
+	if exitPrompt != "" {
+		opts = append(opts, db.WithExitPrompt(exitPrompt))
 	}
 
 	profile, err := r.DB.RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths, opts...)

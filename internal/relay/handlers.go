@@ -1245,6 +1245,7 @@ func (h *Handlers) HandleRegisterProfile(ctx context.Context, req mcp.CallToolRe
 	vaultPaths := normalizeJSONArrayParam(req, "vault_paths")
 	allowedTools := normalizeJSONArrayParam(req, "allowed_tools")
 	poolSize := req.GetInt("pool_size", 0)
+	exitPrompt := req.GetString("exit_prompt", "")
 
 	var opts []db.ProfileOption
 	if allowedTools != "" && allowedTools != "[]" {
@@ -1252,6 +1253,9 @@ func (h *Handlers) HandleRegisterProfile(ctx context.Context, req mcp.CallToolRe
 	}
 	if poolSize > 0 {
 		opts = append(opts, db.WithPoolSize(poolSize))
+	}
+	if exitPrompt != "" {
+		opts = append(opts, db.WithExitPrompt(exitPrompt))
 	}
 
 	profile, err := h.db.RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths, opts...)

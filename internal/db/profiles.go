@@ -9,11 +9,11 @@ import (
 	"github.com/google/uuid"
 )
 
-const profileColumns = "id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, project, org_id, created_at, updated_at"
+const profileColumns = "id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, COALESCE(exit_prompt, ''), project, org_id, created_at, updated_at"
 
 func scanProfile(row interface{ Scan(...any) error }) (models.Profile, error) {
 	var p models.Profile
-	err := row.Scan(&p.ID, &p.Slug, &p.Name, &p.Role, &p.ContextPack, &p.SoulKeys, &p.Skills, &p.VaultPaths, &p.AllowedTools, &p.PoolSize, &p.Project, &p.OrgID, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.Slug, &p.Name, &p.Role, &p.ContextPack, &p.SoulKeys, &p.Skills, &p.VaultPaths, &p.AllowedTools, &p.PoolSize, &p.ExitPrompt, &p.Project, &p.OrgID, &p.CreatedAt, &p.UpdatedAt)
 	return p, err
 }
 
@@ -28,6 +28,13 @@ func WithAllowedTools(tools string) ProfileOption {
 // WithPoolSize sets the max concurrent spawns for a profile.
 func WithPoolSize(size int) ProfileOption {
 	return func(p *models.Profile) { p.PoolSize = size }
+}
+
+// WithExitPrompt overrides the default "when done, set_memory then exit"
+// boilerplate appended to the spawn prompt. Use this to chain the child's
+// final actions (message teammates, dispatch follow-ups) before exit.
+func WithExitPrompt(prompt string) ProfileOption {
+	return func(p *models.Profile) { p.ExitPrompt = prompt }
 }
 
 func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths string, opts ...ProfileOption) (*models.Profile, error) {
@@ -68,8 +75,8 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 			opt(p)
 		}
 		_, err := d.conn.Exec(
-			"INSERT INTO profiles (id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.ID, p.Slug, p.Name, p.Role, p.ContextPack, p.SoulKeys, p.Skills, p.VaultPaths, p.AllowedTools, p.PoolSize, p.Project, p.CreatedAt, p.UpdatedAt,
+			"INSERT INTO profiles (id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, exit_prompt, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.ID, p.Slug, p.Name, p.Role, p.ContextPack, p.SoulKeys, p.Skills, p.VaultPaths, p.AllowedTools, p.PoolSize, p.ExitPrompt, p.Project, p.CreatedAt, p.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert profile: %w", err)
@@ -93,8 +100,8 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 	}
 
 	_, err = d.conn.Exec(
-		"UPDATE profiles SET name = ?, role = ?, context_pack = ?, soul_keys = ?, skills = ?, vault_paths = ?, allowed_tools = ?, pool_size = ?, updated_at = ? WHERE slug = ? AND project = ?",
-		existing.Name, existing.Role, existing.ContextPack, existing.SoulKeys, existing.Skills, existing.VaultPaths, existing.AllowedTools, existing.PoolSize, now, slug, project,
+		"UPDATE profiles SET name = ?, role = ?, context_pack = ?, soul_keys = ?, skills = ?, vault_paths = ?, allowed_tools = ?, pool_size = ?, exit_prompt = ?, updated_at = ? WHERE slug = ? AND project = ?",
+		existing.Name, existing.Role, existing.ContextPack, existing.SoulKeys, existing.Skills, existing.VaultPaths, existing.AllowedTools, existing.PoolSize, existing.ExitPrompt, now, slug, project,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update profile: %w", err)

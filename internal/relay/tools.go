@@ -302,6 +302,7 @@ func registerProfileTool() mcp.Tool {
 		mcp.WithString("vault_paths", mcp.Description("Vault doc path patterns to auto-inject at boot. Accepts JSON string or native array. Supports globs: [\"guides/*.md\"]. {slug} is resolved to the profile slug.")),
 		mcp.WithString("allowed_tools", mcp.Description("Tool patterns this profile can use. JSON array. Examples: [\"mcp__agent-relay__*\",\"Bash\",\"mcp__context7__*\"]. Default: all tools.")),
 		mcp.WithNumber("pool_size", mcp.Description("Max concurrent spawns for this profile (default: 3). Set to 1 for singleton managers like CTO.")),
+		mcp.WithString("exit_prompt", mcp.Description("Optional override for the default 'when done, set_memory then exit' boilerplate at the end of every spawn prompt. Use this to chain the child's last actions: e.g. 'Before exit: 1) send P1 to @reviewer with your PR, 2) dispatch_task to tester, 3) THEN set_memory and exit.' If empty, the safe default is used.")),
 	)
 }
 
