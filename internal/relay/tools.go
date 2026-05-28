@@ -702,9 +702,19 @@ func deleteAgentTool() mcp.Tool {
 func sleepAgentTool() mcp.Tool {
 	return mcp.NewTool(
 		"sleep_agent",
-		mcp.WithDescription("Put an agent to sleep. It stays visible in list_agents (status='sleeping') but signals it's not actively working. Messages are still queued. Wake up by calling register_agent again."),
+		mcp.WithDescription("Put an agent to sleep. It stays visible in list_agents (status='sleeping') but signals it's not actively working. Messages are still queued. Wake up by calling wake_agent (preferred) or register_agent."),
 		asParam,
 		projectParam,
+	)
+}
+
+func wakeAgentTool() mcp.Tool {
+	return mcp.NewTool(
+		"wake_agent",
+		mcp.WithDescription("Wake a sleeping or inactive agent: transition status to 'active', refresh last_seen, clear deactivated_at. Counterpart to sleep_agent. Returns {status, agent, rows_affected}: rows_affected=0 means target not found or already active (no-op, not an error). Together with sleep_agent forms the pairing for cycle-driven agents that wake under their seed identity, work, then sleep again — without spawning ephemeral child rows. The full wake-and-spawn-claude variant (Agent OS mode) builds on this primitive."),
+		asParam,
+		projectParam,
+		mcp.WithString("agent", mcp.Description("Name of the agent to wake (the target seed, e.g. 'endurance'). Distinct from `as`, which identifies the caller."), mcp.Required()),
 	)
 }
 

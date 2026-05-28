@@ -2191,6 +2191,38 @@ func (h *Handlers) HandleSleepAgent(ctx context.Context, req mcp.CallToolRequest
 	})
 }
 
+// HandleWakeAgent transitions a sleeping or inactive agent back to active and
+// refreshes its last_seen / deactivated_at. The target is explicit (`agent`
+// parameter) and distinct from the caller (`as`) — a sleeping agent cannot
+// call MCP tools, so wake is always invoked by some other identity (e.g. the
+// planificateur, the user, or a scheduler). rows_affected = 0 is a no-op
+// (target not found or already active), not an error.
+func (h *Handlers) HandleWakeAgent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	project := resolveProject(ctx, req)
+	caller := resolveAgent(ctx, req)
+	target := strings.ToLower(req.GetString("agent", ""))
+	if target == "" {
+		return mcp.NewToolResultError("missing required parameter: agent"), nil
+	}
+
+	rowsAffected, err := h.db.WakeAgent(project, target)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to wake agent: %v", err)), nil
+	}
+
+	status := "awake"
+	if rowsAffected == 0 {
+		status = "noop"
+	}
+	h.events.Emit(MCPEvent{Type: "register", Action: "wake", Agent: target, Project: project})
+
+	return h.resultJSONTracked(project, caller, "wake_agent", map[string]any{
+		"status":        status,
+		"agent":         target,
+		"rows_affected": rowsAffected,
+	})
+}
+
 // --- Find profiles by skill ---
 
 func (h *Handlers) HandleFindProfiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

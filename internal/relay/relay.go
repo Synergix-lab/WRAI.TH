@@ -158,6 +158,7 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 		server.ServerTool{Tool: deactivateAgentTool(), Handler: handlers.HandleDeactivateAgent},
 		server.ServerTool{Tool: deleteAgentTool(), Handler: handlers.HandleDeleteAgent},
 		server.ServerTool{Tool: sleepAgentTool(), Handler: handlers.HandleSleepAgent},
+		server.ServerTool{Tool: wakeAgentTool(), Handler: handlers.HandleWakeAgent},
 		// Project lifecycle
 		server.ServerTool{Tool: createProjectTool(), Handler: handlers.HandleCreateProject},
 		server.ServerTool{Tool: deleteProjectTool(), Handler: handlers.HandleDeleteProject},
