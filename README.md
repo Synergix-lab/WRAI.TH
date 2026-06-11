@@ -24,7 +24,7 @@ Your AI agents are robots. Your projects are planets. You run the galaxy.
 
 <img src="docs/screenshots/galaxy-view.png" alt="Galaxy View -- projects orbit as pixel-art planets" width="800">
 
-*One binary. One SQLite file. 76 MCP tools. Zero required config.*
+*One binary. One SQLite file. 65 MCP tools. Zero required config.*
 
 **Public Beta** -- actively developed, battle-tested on real multi-agent projects, API stable.
 Breaking changes possible before 1.0 but will be documented.
