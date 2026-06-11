@@ -6,6 +6,7 @@ import { MessageOrb } from "./message-orb.js";
 import { KanbanBoard } from "./kanban.js";
 import { VaultBrowser } from "./vault.js";
 import { OpsConsole } from "./ops.js";
+import { NotificationsPanel } from "./notifications.js";
 import { CommandPanel } from "./command-panel.js";
 import { ShortcutManager } from "./shortcuts.js";
 import { ConnectionOverlay } from "./connections.js";
@@ -1886,7 +1887,7 @@ tabMessages.addEventListener("click", () => {
   messagesPanel.classList.remove("hidden");
   memoriesPanel.classList.add("hidden");
   tasksPanel.classList.add("hidden");
-  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops") setMode("canvas");
+  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops" || currentMode === "notifications") setMode("canvas");
 });
 
 tabMemories.addEventListener("click", () => {
@@ -1897,7 +1898,7 @@ tabMemories.addEventListener("click", () => {
   memoriesPanel.classList.remove("hidden");
   messagesPanel.classList.add("hidden");
   tasksPanel.classList.add("hidden");
-  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops") setMode("canvas");
+  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops" || currentMode === "notifications") setMode("canvas");
   loadMemories();
 });
 
@@ -1917,7 +1918,7 @@ tabTasks.addEventListener("click", () => {
   tasksPanel.classList.remove("hidden");
   messagesPanel.classList.add("hidden");
   memoriesPanel.classList.add("hidden");
-  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops") setMode("canvas");
+  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops" || currentMode === "notifications") setMode("canvas");
   loadTasks();
 });
 
@@ -2455,7 +2456,7 @@ let colonyProject = null; // project name when in colony view
 function setMode(mode) {
   currentMode = mode;
   const main = document.getElementById("main");
-  main.classList.remove("mode-canvas", "mode-detail", "mode-kanban", "mode-vault", "mode-ops");
+  main.classList.remove("mode-canvas", "mode-detail", "mode-kanban", "mode-vault", "mode-ops", "mode-notifications");
 
   // Update header mode buttons
   document.querySelectorAll(".mode-btn").forEach(btn => {
@@ -2506,8 +2507,15 @@ function setMode(mode) {
     opsConsole.hide();
   }
 
-  // Messages panel: hidden in kanban/vault/ops mode
-  if (mode === "kanban" || mode === "vault" || mode === "ops") {
+  // Show/hide notifications
+  if (mode === "notifications") {
+    notificationsView.show(focusedProject || "default");
+  } else {
+    notificationsView.hide();
+  }
+
+  // Messages panel: hidden in kanban/vault/ops/notifications mode
+  if (mode === "kanban" || mode === "vault" || mode === "ops" || mode === "notifications") {
     messagesPanel.classList.add("hidden");
     memoriesPanel.classList.add("hidden");
     tasksPanel.classList.add("hidden");
@@ -3005,6 +3013,12 @@ const opsPanel = document.getElementById("ops-panel");
 const opsConsole = new OpsConsole(opsPanel);
 opsConsole.hide();
 
+// --- Notifications panel ---
+const notificationsPanel = document.getElementById("notifications-panel");
+const notificationsView = new NotificationsPanel(notificationsPanel);
+notificationsView.hide();
+window._notificationsView = notificationsView;
+
 vaultBrowser.onSearch = async (query) => {
   const project = focusedProject || "";
   const result = await client.searchVaultDocs(project, query);
@@ -3038,6 +3052,9 @@ shortcuts.register("3", "mode-vault", "Docs view", () => {
 });
 shortcuts.register("4", "mode-ops", "Ops view", () => {
   if (viewMode === "colony") setMode("ops");
+});
+shortcuts.register("5", "mode-notifications", "Notifications view", () => {
+  if (viewMode === "colony") setMode("notifications");
 });
 
 // Colony sidebar tabs
