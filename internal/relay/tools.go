@@ -291,18 +291,12 @@ func resolveConflictTool() mcp.Tool {
 func registerProfileTool() mcp.Tool {
 	return mcp.NewTool(
 		"register_profile",
-		mcp.WithDescription("Create or update a profile archetype. A profile defines a reusable agent role with a context pack (soul, skills, working style). Profiles are the 'executables' of the Agent OS — any spawn slot running this profile inherits all its knowledge."),
+		mcp.WithDescription("Create or update a profile — a slim identity card for an agent role (name, role, advertised skills). Other agents discover it via find_profiles."),
 		projectParam,
 		mcp.WithString("slug", mcp.Description("Unique profile identifier (e.g. 'backend', 'frontend', 'devops')"), mcp.Required()),
 		mcp.WithString("name", mcp.Description("Display name for the profile"), mcp.Required()),
 		mcp.WithString("role", mcp.Description("Role description")),
-		mcp.WithString("context_pack", mcp.Description("Markdown blob: soul, skills, working style")),
-		mcp.WithString("soul_keys", mcp.Description("Memory keys to load at boot. Accepts JSON string '[\"key1\",\"key2\"]' or native array.")),
-		mcp.WithString("skills", mcp.Description("Skill objects. Accepts JSON string or native array. Format: [{\"id\":\"...\",\"name\":\"...\",\"tags\":[...]}]")),
-		mcp.WithString("vault_paths", mcp.Description("Vault doc path patterns to auto-inject at boot. Accepts JSON string or native array. Supports globs: [\"guides/*.md\"]. {slug} is resolved to the profile slug.")),
-		mcp.WithString("allowed_tools", mcp.Description("Tool patterns this profile can use. JSON array. Examples: [\"mcp__agent-relay__*\",\"Bash\",\"mcp__context7__*\"]. Default: all tools.")),
-		mcp.WithNumber("pool_size", mcp.Description("Max concurrent spawns for this profile (default: 3). Set to 1 for singleton managers like CTO.")),
-		mcp.WithString("exit_prompt", mcp.Description("Optional override for the default 'when done, set_memory then exit' boilerplate at the end of every spawn prompt. Use this to chain the child's last actions: e.g. 'Before exit: 1) send P1 to @reviewer with your PR, 2) dispatch_task to tester, 3) THEN set_memory and exit.' If empty, the safe default is used.")),
+		mcp.WithString("skills", mcp.Description("Skill objects for discovery. Accepts JSON string or native array. Format: [{\"id\":\"...\",\"name\":\"...\",\"tags\":[...]}]")),
 	)
 }
 
@@ -620,47 +614,6 @@ func getGoalCascadeTool() mcp.Tool {
 	)
 }
 
-// --- Vault tools ---
-
-func registerVaultTool() mcp.Tool {
-	return mcp.NewTool(
-		"register_vault",
-		mcp.WithDescription("Register a vault (markdown docs folder) for a project. The relay indexes all .md files and watches for changes via fsnotify. One vault per project. Re-registering replaces the previous vault path.\n\nSuggested vault location: ~/.agent-relay/projects/<project-name>/vault/\n\nAfter registering, update your profiles' vault_paths to reference the new docs so they auto-inject at agent boot."),
-		projectParam,
-		mcp.WithString("path", mcp.Description("Absolute path to the vault directory (e.g. '/Users/me/my-org-docs')"), mcp.Required()),
-	)
-}
-
-func searchVaultTool() mcp.Tool {
-	return mcp.NewTool(
-		"search_vault",
-		mcp.WithDescription("Full-text search across indexed vault documents (markdown files). Returns matching docs with excerpts. Use get_vault_doc to retrieve full content after finding a match."),
-		projectParam,
-		mcp.WithString("query", mcp.Description("Search query (FTS5 syntax: plain words, OR, phrases in quotes)"), mcp.Required()),
-		mcp.WithString("tags", mcp.Description("JSON array of tags to filter by (e.g. [\"guides\",\"decisions\"])")),
-		mcp.WithNumber("limit", mcp.Description("Max results (default: 10)")),
-	)
-}
-
-func getVaultDocTool() mcp.Tool {
-	return mcp.NewTool(
-		"get_vault_doc",
-		mcp.WithDescription("Get the full content of a vault document by its path. Use search_vault first to find the right path."),
-		projectParam,
-		mcp.WithString("path", mcp.Description("Document path relative to vault root (e.g. 'guides/supabase-auth-config.md')"), mcp.Required()),
-	)
-}
-
-func listVaultDocsTool() mcp.Tool {
-	return mcp.NewTool(
-		"list_vault_docs",
-		mcp.WithDescription("List indexed vault documents with optional tag filtering. Returns metadata only (no content)."),
-		projectParam,
-		mcp.WithString("tags", mcp.Description("JSON array of tags to filter by")),
-		mcp.WithNumber("limit", mcp.Description("Max results (default: 100)")),
-	)
-}
-
 // --- File locks ---
 
 func claimFilesTool() mcp.Tool {
@@ -860,85 +813,3 @@ func addNotifyChannelTool() mcp.Tool {
 	)
 }
 
-// --- Spawn (fork/exec) tools ---
-
-func spawnTool() mcp.Tool {
-	return mcp.NewTool(
-		"spawn",
-		mcp.WithDescription("Spawn a child agent process (fork). Two modes:\n\n1. **Agent OS mode** (recommended): pass profile + cycle. The relay assembles the full context (identity, task, knowledge, rules, tools) from the DB. The agent opens its eyes knowing everything.\n\n2. **Legacy mode**: pass profile + prompt. Raw prompt is passed directly to claude.\n\nReturns immediately with child ID — executes asynchronously. Use list_children to monitor."),
-		asParam,
-		projectParam,
-		mcp.WithString("profile", mcp.Description("Profile slug for the child agent (e.g. 'backend', 'cto'). Must match a registered profile."), mcp.Required()),
-		mcp.WithString("cycle", mcp.Description("Cycle name (Agent OS mode). The relay loads the cycle prompt from the cycles table and assembles full context (identity, task, knowledge, rules). Examples: 'heartbeat-5min', 'execute-task', 'review-pr'.")),
-		mcp.WithString("task_id", mcp.Description("Task ID to load into context (Agent OS mode). The spawned agent receives the full task details.")),
-		mcp.WithString("prompt", mcp.Description("Raw prompt (legacy mode). Used only if 'cycle' is not set.")),
-		mcp.WithString("ttl", mcp.Description("Max execution time (default: from cycle TTL or '10m'). Accepts Go duration format: '5m', '1h', '30s'.")),
-	)
-}
-
-func killChildTool() mcp.Tool {
-	return mcp.NewTool(
-		"kill_child",
-		mcp.WithDescription("Terminate a running child agent by ID. Sends SIGTERM to the subprocess."),
-		asParam,
-		projectParam,
-		mcp.WithString("child_id", mcp.Description("Child agent ID (from spawn response)"), mcp.Required()),
-	)
-}
-
-func listChildrenTool() mcp.Tool {
-	return mcp.NewTool(
-		"list_children",
-		mcp.WithDescription("List spawned child agents. Shows running and recently finished children with their status, duration, and exit codes."),
-		asParam,
-		projectParam,
-		mcp.WithString("status", mcp.Description("Filter by status: 'running', 'finished', 'killed', or 'all' (default: 'all')"),
-			mcp.Enum("running", "finished", "killed", "all"),
-		),
-	)
-}
-
-// --- Schedule (crontab) tools ---
-
-func scheduleTool() mcp.Tool {
-	return mcp.NewTool(
-		"schedule",
-		mcp.WithDescription("Create or update a cron schedule. Two modes:\n\n1. **Agent OS mode**: set 'cycle' — the relay assembles full context at each trigger (profile + vault + memories + task).\n\n2. **Legacy mode**: set 'prompt' — raw prompt passed to claude each cycle.\n\nLike `crontab -e` for agents."),
-		asParam,
-		projectParam,
-		mcp.WithString("name", mcp.Description("Schedule name (unique per agent, e.g. 'daily-review', '5min-check')"), mcp.Required()),
-		mcp.WithString("cron_expr", mcp.Description("Cron expression (5-field: minute hour day month weekday). Examples: '*/5 * * * *' (every 5min), '0 9 * * *' (daily 9am), '0 */4 * * *' (every 4h)."), mcp.Required()),
-		mcp.WithString("cycle", mcp.Description("Cycle name (Agent OS mode). Loads the cycle prompt from the cycles table and assembles full context. Examples: 'heartbeat-5min', 'heartbeat-1h'.")),
-		mcp.WithString("prompt", mcp.Description("Raw prompt (legacy mode). Used only if 'cycle' is not set.")),
-		mcp.WithString("ttl", mcp.Description("Max execution time per cycle (default: from cycle TTL or '10m')")),
-	)
-}
-
-func unscheduleTool() mcp.Tool {
-	return mcp.NewTool(
-		"unschedule",
-		mcp.WithDescription("Remove a cron schedule. The agent will no longer be triggered on this schedule."),
-		asParam,
-		projectParam,
-		mcp.WithString("schedule_id", mcp.Description("Schedule ID to remove (from list_schedules)"), mcp.Required()),
-	)
-}
-
-func listSchedulesTool() mcp.Tool {
-	return mcp.NewTool(
-		"list_schedules",
-		mcp.WithDescription("List all cron schedules for an agent or project. Like `crontab -l`."),
-		asParam,
-		projectParam,
-	)
-}
-
-func triggerCycleTool() mcp.Tool {
-	return mcp.NewTool(
-		"trigger_cycle",
-		mcp.WithDescription("Manually trigger a scheduled cycle right now, without waiting for the cron timer. Like `systemctl start`."),
-		asParam,
-		projectParam,
-		mcp.WithString("schedule_id", mcp.Description("Schedule ID to trigger (from list_schedules)"), mcp.Required()),
-	)
-}

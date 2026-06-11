@@ -1,8 +1,6 @@
 package relay
 
 import (
-	"fmt"
-
 	"agent-relay/internal/models"
 )
 
@@ -26,10 +24,6 @@ const goalAncestryCap = 3
 
 // goalContextCap limits the number of unique goals surfaced in session_context.
 const goalContextCap = 10
-
-// vaultDocHeadBytes is kept verbatim when a vault doc is tail-truncated so the
-// reader still sees the title / frontmatter.
-const vaultDocHeadBytes = 200
 
 // sessionUnreadBudget bounds the total bytes spent on unread_messages in
 // session_context. With msgContentPreview=300, ~15 messages fit; P0 messages
@@ -295,19 +289,3 @@ func projectGoalAncestry(chain []models.Goal) []models.Goal {
 	return out
 }
 
-// projectVaultDoc applies head+tail truncation with a human-readable marker when
-// content exceeds maxBytes. Returns the original content untouched if it fits.
-func projectVaultDoc(content, path string, maxBytes int) string {
-	if maxBytes <= 0 || len(content) <= maxBytes {
-		return content
-	}
-	truncatedKB := (len(content) - maxBytes) / 1024
-	marker := fmt.Sprintf("\n<!-- %d KB truncated, call get_vault_doc(%q) for full content -->\n", truncatedKB, path)
-	head := content[:vaultDocHeadBytes]
-	tailStart := len(content) - (maxBytes - vaultDocHeadBytes - len(marker))
-	if tailStart <= vaultDocHeadBytes {
-		// Budget too small for head+marker+tail; return head+marker.
-		return head + marker
-	}
-	return head + marker + content[tailStart:]
-}

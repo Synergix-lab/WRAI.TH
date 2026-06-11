@@ -14,35 +14,20 @@ import (
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/models"
-	"agent-relay/internal/spawn"
-	"agent-relay/internal/vault"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 type Handlers struct {
-	db           *db.DB
-	registry     *SessionRegistry
-	ingester     *ingest.Ingester
-	vaultWatcher *vault.Watcher
-	events       *EventBus
-	tokenCh      chan db.TokenRecord
-	spawnMgr     *spawn.Manager
-	wfEngine     WorkflowFirer
+	db       *db.DB
+	registry *SessionRegistry
+	ingester *ingest.Ingester
+	events   *EventBus
+	tokenCh  chan db.TokenRecord
 }
 
-// WorkflowFirer is the interface the dispatcher uses to fire workflows.
-type WorkflowFirer interface {
-	FireWorkflows(project, event string, meta map[string]string)
-}
-
-// SetWorkflowEngine connects the workflow engine for event-driven execution.
-func (h *Handlers) SetWorkflowEngine(engine WorkflowFirer) {
-	h.wfEngine = engine
-}
-
-func NewHandlers(database *db.DB, registry *SessionRegistry, ingester *ingest.Ingester, vaultWatcher *vault.Watcher, events *EventBus) *Handlers {
-	h := &Handlers{db: database, registry: registry, ingester: ingester, vaultWatcher: vaultWatcher, events: events, tokenCh: make(chan db.TokenRecord, 256)}
+func NewHandlers(database *db.DB, registry *SessionRegistry, ingester *ingest.Ingester, events *EventBus) *Handlers {
+	h := &Handlers{db: database, registry: registry, ingester: ingester, events: events, tokenCh: make(chan db.TokenRecord, 256)}
 	go h.flushTokenUsage()
 	return h
 }
@@ -355,15 +340,6 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		h.registry.NotifyBroadcast(project, from, subject, msg.ID)
 	} else {
 		h.registry.Notify(project, to, from, subject, msg.ID)
-	}
-
-	// Fire triggers for high-priority messages (P0/P1)
-	if priority == "P0" || priority == "P1" {
-		msgMeta := map[string]string{"priority": priority, "from": from, "to": to, "subject": subject, "message_id": msg.ID}
-		go h.fireTriggers(project, "message.received", msgMeta)
-		if priority == "P0" {
-			go h.fireTriggers(project, "signal.interrupt", msgMeta)
-		}
 	}
 
 	// Emit visual event for activity feed / SSE subscribers. Action distinguishes
@@ -1244,26 +1220,9 @@ func (h *Handlers) HandleRegisterProfile(ctx context.Context, req mcp.CallToolRe
 		return mcp.NewToolResultError("name is required"), nil
 	}
 	role := req.GetString("role", "")
-	contextPack := req.GetString("context_pack", "")
-	soulKeys := normalizeJSONArrayParam(req, "soul_keys")
 	skills := normalizeJSONArrayParam(req, "skills")
-	vaultPaths := normalizeJSONArrayParam(req, "vault_paths")
-	allowedTools := normalizeJSONArrayParam(req, "allowed_tools")
-	poolSize := req.GetInt("pool_size", 0)
-	exitPrompt := req.GetString("exit_prompt", "")
 
-	var opts []db.ProfileOption
-	if allowedTools != "" && allowedTools != "[]" {
-		opts = append(opts, db.WithAllowedTools(allowedTools))
-	}
-	if poolSize > 0 {
-		opts = append(opts, db.WithPoolSize(poolSize))
-	}
-	if exitPrompt != "" {
-		opts = append(opts, db.WithExitPrompt(exitPrompt))
-	}
-
-	profile, err := h.db.RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths, opts...)
+	profile, err := h.db.RegisterProfile(project, slug, name, role, skills)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to register profile: %v", err)), nil
 	}
@@ -1364,8 +1323,7 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 		if existing == nil {
 			_, _ = h.db.RegisterProfile(project, "human", "Human Operator",
 				"Tasks that require human action (API keys, approvals, purchases, manual config)",
-				"You are the human operator. Complete these tasks outside the relay.",
-				"[]", "[]", "[]")
+				"[]")
 		}
 	}
 
@@ -1410,11 +1368,6 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "dispatch", Agent: agent, Project: project, Target: profile, Label: title})
-
-	// Fire triggers for task_pending
-	go h.fireTriggers(project, "task.dispatched", map[string]string{
-		"profile": profile, "priority": priority, "task_id": task.ID, "dispatched_by": agent, "title": title,
-	})
 
 	resp := map[string]any{"task": task}
 	if autoBoard != nil {
@@ -1511,10 +1464,6 @@ func (h *Handlers) HandleResumeTask(ctx context.Context, req mcp.CallToolRequest
 	}
 	h.events.Emit(MCPEvent{Type: "task", Action: "resume", Agent: agent, Project: project, Label: task.Title})
 
-	go h.fireTriggers(project, "task.resumed", map[string]string{
-		"task_id": task.ID, "profile": task.ProfileSlug, "resumed_by": agent, "title": task.Title,
-	})
-
 	return h.resultJSONTracked(project, agent, "resume_task", task)
 }
 
@@ -1537,31 +1486,6 @@ func (h *Handlers) HandleCompleteTask(ctx context.Context, req mcp.CallToolReque
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "complete", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
-
-	// Fire triggers for task_completed
-	go h.fireTriggers(project, "task.completed", map[string]string{
-		"task_id": task.ID, "profile": task.ProfileSlug, "completed_by": agent, "title": task.Title,
-	})
-
-	// Pool slot may have just freed — if any pending tasks exist for this
-	// profile, re-fire task.dispatched for the oldest one. Previously a full
-	// pool would strand pending tasks forever because the initial dispatch
-	// trigger fires once and no retry is scheduled on pool-free.
-	if task.ProfileSlug != "" {
-		go func(proj, profileSlug string) {
-			pending, _ := h.db.GetOldestPendingTaskForProfile(proj, profileSlug)
-			if pending == nil {
-				return
-			}
-			h.fireTriggers(proj, "task.dispatched", map[string]string{
-				"task_id":       pending.ID,
-				"profile":       pending.ProfileSlug,
-				"dispatched_by": pending.DispatchedBy,
-				"title":         pending.Title,
-				"requeued":      "true",
-			})
-		}(project, task.ProfileSlug)
-	}
 
 	// Notify dispatcher
 	h.registry.Notify(project, task.DispatchedBy, agent, fmt.Sprintf("Task done: %s", task.Title), task.ID)
@@ -1612,16 +1536,6 @@ func (h *Handlers) HandleBlockTask(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "block", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
-
-	// Fire triggers for task_blocked + signal:alert
-	blockMeta := map[string]string{
-		"task_id": task.ID, "profile": task.ProfileSlug, "blocked_by": agent, "title": task.Title,
-	}
-	if reason != nil {
-		blockMeta["reason"] = *reason
-	}
-	go h.fireTriggers(project, "task.blocked", blockMeta)
-	go h.fireTriggers(project, "signal.alert", blockMeta)
 
 	// Notify dispatcher — blocked is critical
 	reasonStr := ""
@@ -2691,42 +2605,7 @@ func (h *Handlers) buildSessionContext(project, agentName string, profileSlug *s
 	}
 	result["relevant_memories"] = memories
 
-	// Vault context: auto-inject docs based on profile vault_paths
-	if profileSlug != nil && *profileSlug != "" {
-		profile, _ := h.db.GetProfile(project, *profileSlug)
-		if profile != nil && profile.VaultPaths != "" && profile.VaultPaths != "[]" {
-			var paths []string
-			if err := json.Unmarshal([]byte(profile.VaultPaths), &paths); err == nil && len(paths) > 0 {
-				// Resolve {slug} template
-				resolved := make([]string, len(paths))
-				for i, p := range paths {
-					resolved[i] = strings.ReplaceAll(p, "{slug}", *profileSlug)
-				}
-
-				// Max ~4000 bytes (conservative estimate for ~4000 tokens)
-				maxBytes := 16000 // ~4000 tokens at ~4 bytes/token
-				docs, _ := h.db.GetVaultDocsByPaths(project, resolved, maxBytes)
-				if len(docs) > 0 {
-					type vaultCtx struct {
-						Path    string `json:"path"`
-						Title   string `json:"title"`
-						Content string `json:"content"`
-					}
-					vaultDocs := make([]vaultCtx, len(docs))
-					for i, d := range docs {
-						// Per-doc cap (head+tail projection) — a single oversize doc
-						// must not monopolize the budget.
-						vaultDocs[i] = vaultCtx{
-							Path:    d.Path,
-							Title:   d.Title,
-							Content: projectVaultDoc(d.Content, d.Path, 8000),
-						}
-					}
-					result["vault_context"] = vaultDocs
-				}
-			}
-		}
-	}
+	// Vault/doc context is served externally (ctx.prod.synergix.ch), not injected here.
 
 	return result
 }
@@ -3031,148 +2910,3 @@ func (h *Handlers) HandleAddNotifyChannel(ctx context.Context, req mcp.CallToolR
 	})
 }
 
-// --- Vault ---
-
-func (h *Handlers) HandleRegisterVault(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	path := req.GetString("path", "")
-	if path == "" {
-		return mcp.NewToolResultError("path is required"), nil
-	}
-
-	// Verify path exists and is a directory
-	info, err := os.Stat(path)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("path not accessible: %v", err)), nil
-	}
-	if !info.IsDir() {
-		return mcp.NewToolResultError("path must be a directory"), nil
-	}
-
-	// Save to DB
-	if err := h.db.RegisterVault(project, path); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to register vault: %v", err)), nil
-	}
-
-	// Start indexing + watching
-	cfg := models.VaultConfig{Path: path, Project: project}
-	if h.vaultWatcher != nil {
-		h.vaultWatcher.AddVault(cfg)
-	}
-
-	// Get stats
-	count, totalSize, _ := h.db.GetVaultStats(project)
-
-	// Check if any profiles exist with empty vault_paths
-	profiles, _ := h.db.ListProfiles(project)
-	var emptyVaultProfiles []string
-	for _, p := range profiles {
-		if p.VaultPaths == "" || p.VaultPaths == "[]" {
-			emptyVaultProfiles = append(emptyVaultProfiles, p.Slug)
-		}
-	}
-
-	resp := map[string]any{
-		"registered":   true,
-		"project":      project,
-		"path":         path,
-		"docs_indexed": count,
-		"total_bytes":  totalSize,
-	}
-	if len(emptyVaultProfiles) > 0 {
-		resp["hint"] = fmt.Sprintf("Profiles with empty vault_paths: %v. Consider updating them with register_profile to auto-inject vault docs at boot.", emptyVaultProfiles)
-	}
-	return h.resultJSONTracked(project, "", "register_vault", resp)
-}
-
-func (h *Handlers) HandleSearchVault(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	query := req.GetString("query", "")
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
-	}
-	limit := req.GetInt("limit", 10)
-
-	var tags []string
-	if tagsJSON := req.GetString("tags", ""); tagsJSON != "" && tagsJSON != "[]" {
-		_ = json.Unmarshal([]byte(tagsJSON), &tags)
-	}
-
-	results, err := h.db.SearchVault(project, query, tags, limit)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
-	}
-	if results == nil {
-		results = []models.VaultSearchResult{}
-	}
-
-	return h.resultJSONTracked(project, "", "search_vault", map[string]any{
-		"query":   query,
-		"count":   len(results),
-		"results": results,
-	})
-}
-
-func (h *Handlers) HandleGetVaultDoc(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	path := req.GetString("path", "")
-	if path == "" {
-		return mcp.NewToolResultError("path is required"), nil
-	}
-
-	doc, err := h.db.GetVaultDoc(project, path)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to get vault doc: %v", err)), nil
-	}
-	if doc == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("vault doc not found: %s", path)), nil
-	}
-
-	return h.resultJSONTracked(project, "", "get_vault_doc", doc)
-}
-
-func (h *Handlers) HandleListVaultDocs(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	limit := req.GetInt("limit", 100)
-
-	var tags []string
-	if tagsJSON := req.GetString("tags", ""); tagsJSON != "" && tagsJSON != "[]" {
-		_ = json.Unmarshal([]byte(tagsJSON), &tags)
-	}
-
-	docs, err := h.db.ListVaultDocs(project, tags, limit)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to list vault docs: %v", err)), nil
-	}
-	if docs == nil {
-		docs = []models.VaultDoc{}
-	}
-
-	// Return metadata only (strip content)
-	type docMeta struct {
-		Path      string `json:"path"`
-		Title     string `json:"title"`
-		Owner     string `json:"owner"`
-		Status    string `json:"status"`
-		Tags      string `json:"tags"`
-		SizeBytes int    `json:"size_bytes"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	metas := make([]docMeta, len(docs))
-	for i, d := range docs {
-		metas[i] = docMeta{
-			Path: d.Path, Title: d.Title, Owner: d.Owner,
-			Status: d.Status, Tags: d.Tags, SizeBytes: d.SizeBytes,
-			UpdatedAt: d.UpdatedAt,
-		}
-	}
-
-	count, totalSize, _ := h.db.GetVaultStats(project)
-
-	return h.resultJSONTracked(project, "", "list_vault_docs", map[string]any{
-		"count":       len(metas),
-		"total_docs":  count,
-		"total_bytes": totalSize,
-		"docs":        metas,
-	})
-}

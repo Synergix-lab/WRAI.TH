@@ -3,11 +3,8 @@ package relay
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -112,18 +109,9 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiDeleteTask(w, req, path)
 	case strings.HasPrefix(path, "/tasks/") && req.Method == http.MethodGet:
 		r.apiGetTask(w, req, path)
-	// Agent management
-	case strings.HasPrefix(path, "/agents/") && req.Method == http.MethodDelete:
-		r.apiDeactivateAgent(w, req, path)
-	// Profile endpoints
+	// Profile endpoints (read-only; profiles are slimmed to identity)
 	case path == "/profiles" && req.Method == http.MethodGet:
 		r.apiGetProfiles(w, req)
-	case path == "/profiles" && req.Method == http.MethodPost:
-		r.apiCreateProfile(w, req)
-	case strings.HasPrefix(path, "/profiles/") && req.Method == http.MethodPut:
-		r.apiUpdateProfile(w, req, path)
-	case strings.HasPrefix(path, "/profiles/") && req.Method == http.MethodDelete:
-		r.apiDeleteProfile(w, req, path)
 	case strings.HasPrefix(path, "/profiles/") && req.Method == http.MethodGet:
 		r.apiGetProfile(w, req, path)
 	// Org + Team endpoints
@@ -153,19 +141,6 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiGetBoards(w, req)
 	case path == "/boards/all" && req.Method == http.MethodGet:
 		r.apiGetAllBoards(w)
-	// Vault endpoints
-	case path == "/vault/search" && req.Method == http.MethodGet:
-		r.apiSearchVault(w, req)
-	case path == "/vault/docs/all" && req.Method == http.MethodGet:
-		r.apiListAllVaultDocs(w)
-	case path == "/vault/docs" && req.Method == http.MethodGet:
-		r.apiListVaultDocs(w, req)
-	case strings.HasPrefix(path, "/vault/doc/") && req.Method == http.MethodGet:
-		r.apiGetVaultDoc(w, req, path)
-	case strings.HasPrefix(path, "/vault/doc/") && req.Method == http.MethodPut:
-		r.apiUpdateVaultDoc(w, req, path)
-	case path == "/vault/stats" && req.Method == http.MethodGet:
-		r.apiGetVaultStats(w, req)
 	// Token usage
 	case path == "/token-usage" && req.Method == http.MethodGet:
 		r.apiGetTokenUsage(w, req)
@@ -175,129 +150,6 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiGetTokenUsageByAgent(w, req)
 	case path == "/token-usage/timeseries" && req.Method == http.MethodGet:
 		r.apiGetTokenTimeSeries(w, req)
-	// Spawn endpoints
-	case path == "/spawn/children" && req.Method == http.MethodGet:
-		r.apiGetSpawnChildren(w, req)
-	case path == "/spawn/children" && req.Method == http.MethodPost:
-		r.apiSpawnChild(w, req)
-	case strings.HasPrefix(path, "/spawn/children/") && strings.HasSuffix(path, "/kill") && req.Method == http.MethodPost:
-		r.apiKillSpawnChild(w, path)
-	case strings.HasPrefix(path, "/spawn/children/") && req.Method == http.MethodGet:
-		r.apiGetSpawnChild(w, path)
-	// Terminal (PTY) endpoints
-	case path == "/terminal/spawn" && req.Method == http.MethodPost:
-		r.apiTerminalSpawn(w, req)
-	case strings.HasPrefix(path, "/terminal/ws/") && req.Method == http.MethodGet:
-		r.apiTerminalWS(w, req, path)
-	case strings.HasPrefix(path, "/terminal/") && strings.HasSuffix(path, "/kill") && req.Method == http.MethodPost:
-		r.apiTerminalKill(w, path)
-	// Schedule endpoints
-	case path == "/schedules" && req.Method == http.MethodGet:
-		r.apiGetSchedules(w, req)
-	case path == "/schedules" && req.Method == http.MethodPost:
-		r.apiCreateSchedule(w, req)
-	case strings.HasPrefix(path, "/schedules/") && strings.HasSuffix(path, "/trigger") && req.Method == http.MethodPost:
-		r.apiTriggerSchedule(w, path)
-	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodPut:
-		r.apiUpdateSchedule(w, req, path)
-	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodGet:
-		r.apiGetSchedule(w, path)
-	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodDelete:
-		r.apiDeleteSchedule(w, path)
-	// Cycle history
-	case path == "/cycle-history" && req.Method == http.MethodGet:
-		r.apiGetCycleHistory(w, req)
-	// Triggers (event-driven spawn rules)
-	case path == "/triggers" && req.Method == http.MethodGet:
-		r.apiGetTriggers(w, req)
-	case path == "/triggers" && req.Method == http.MethodPost:
-		r.apiCreateTrigger(w, req)
-	case strings.HasPrefix(path, "/triggers/") && req.Method == http.MethodPut:
-		r.apiUpdateTrigger(w, req, path)
-	case strings.HasPrefix(path, "/triggers/") && req.Method == http.MethodDelete:
-		r.apiDeleteTrigger(w, path)
-	// Agent OS spawn (profile + cycle)
-	case path == "/spawn/context" && req.Method == http.MethodPost:
-		r.apiSpawnWithContext(w, req)
-	// Trigger history + webhooks + signal handlers
-	case path == "/trigger-history" && req.Method == http.MethodGet:
-		r.apiGetTriggerHistory(w, req)
-	case strings.HasPrefix(path, "/webhooks/") && req.Method == http.MethodPost:
-		r.apiWebhook(w, req, path)
-	case path == "/signal-handlers" && req.Method == http.MethodPost:
-		r.apiCreateSignalHandler(w, req)
-	// Poll triggers (external URL monitoring)
-	case path == "/poll-triggers" && req.Method == http.MethodGet:
-		r.apiGetPollTriggers(w, req)
-	case path == "/poll-triggers" && req.Method == http.MethodPost:
-		r.apiCreatePollTrigger(w, req)
-	case strings.HasPrefix(path, "/poll-triggers/") && strings.HasSuffix(path, "/test") && req.Method == http.MethodPost:
-		r.apiTestPollTrigger(w, path)
-	case strings.HasPrefix(path, "/poll-triggers/") && req.Method == http.MethodDelete:
-		r.apiDeletePollTrigger(w, path)
-	// Skill registry
-	case path == "/skills" && req.Method == http.MethodGet:
-		r.apiGetSkills(w, req)
-	case path == "/skills" && req.Method == http.MethodPost:
-		r.apiCreateSkill(w, req)
-	case strings.HasPrefix(path, "/skills/") && strings.HasSuffix(path, "/profiles") && req.Method == http.MethodGet:
-		r.apiGetSkillProfiles(w, req, path)
-	case strings.HasPrefix(path, "/skills/") && req.Method == http.MethodDelete:
-		r.apiDeleteSkill(w, req, path)
-	// Service discovery
-	case path == "/discover" && req.Method == http.MethodGet:
-		r.apiDiscover(w, req)
-	// Per-agent quotas
-	case path == "/quotas" && req.Method == http.MethodGet:
-		r.apiGetQuotas(w, req)
-	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodGet:
-		r.apiGetAgentQuota(w, req, path)
-	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodPut:
-		r.apiSetAgentQuota(w, req, path)
-	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodDelete:
-		r.apiDeleteQuota(w, req, path)
-	// Cycles CRUD
-	case path == "/cycles" && req.Method == http.MethodGet:
-		r.apiGetCycles(w, req)
-	case path == "/cycles" && req.Method == http.MethodPost:
-		r.apiCreateCycle(w, req)
-	case strings.HasPrefix(path, "/cycles/") && req.Method == http.MethodGet:
-		r.apiGetCycle(w, req, path)
-	case strings.HasPrefix(path, "/cycles/") && req.Method == http.MethodPut:
-		r.apiUpdateCycle(w, req, path)
-	case strings.HasPrefix(path, "/cycles/") && req.Method == http.MethodDelete:
-		r.apiDeleteCycle(w, req, path)
-	// Privilege escalation
-	case path == "/elevations" && req.Method == http.MethodGet:
-		r.apiGetElevations(w, req)
-	case path == "/elevations" && req.Method == http.MethodPost:
-		r.apiGrantElevation(w, req)
-	case strings.HasPrefix(path, "/elevations/") && req.Method == http.MethodDelete:
-		r.apiRevokeElevation(w, path)
-	// Custom events (user-defined event types)
-	case path == "/custom-events" && req.Method == http.MethodGet:
-		r.apiGetCustomEvents(w, req)
-	case path == "/custom-events" && req.Method == http.MethodPost:
-		r.apiCreateCustomEvent(w, req)
-	case strings.HasPrefix(path, "/custom-events/") && req.Method == http.MethodDelete:
-		r.apiDeleteCustomEvent(w, path)
-	// Workflow endpoints
-	case path == "/workflows" && req.Method == http.MethodGet:
-		r.apiGetWorkflows(w, req)
-	case path == "/workflows" && req.Method == http.MethodPost:
-		r.apiCreateWorkflow(w, req)
-	case strings.HasPrefix(path, "/workflows/") && strings.HasSuffix(path, "/execute") && req.Method == http.MethodPost:
-		r.apiExecuteWorkflow(w, req, path)
-	case strings.HasPrefix(path, "/workflows/") && strings.HasSuffix(path, "/runs") && req.Method == http.MethodGet:
-		r.apiGetWorkflowRuns(w, req, path)
-	case strings.HasPrefix(path, "/workflows/") && req.Method == http.MethodPut:
-		r.apiUpdateWorkflow(w, req, path)
-	case strings.HasPrefix(path, "/workflows/") && req.Method == http.MethodDelete:
-		r.apiDeleteWorkflow(w, path)
-	case strings.HasPrefix(path, "/workflows/") && req.Method == http.MethodGet:
-		r.apiGetWorkflow(w, path)
-	case strings.HasPrefix(path, "/workflow-runs/") && req.Method == http.MethodGet:
-		r.apiGetWorkflowRunDetail(w, path)
 	default:
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 	}
@@ -1596,197 +1448,6 @@ func (r *Relay) apiGetAllBoards(w http.ResponseWriter) {
 		boards = []models.Board{}
 	}
 	writeJSON(w, boards)
-}
-
-// --- Vault API endpoints ---
-
-func (r *Relay) apiSearchVault(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	query := req.URL.Query().Get("q")
-	if query == "" {
-		http.Error(w, `{"error":"q parameter is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	var tags []string
-	if t := req.URL.Query().Get("tags"); t != "" {
-		_ = json.Unmarshal([]byte(t), &tags)
-	}
-
-	results, err := r.DB.SearchVault(project, query, tags, 20)
-	if err != nil {
-		http.Error(w, `{"error":"search failed"}`, http.StatusInternalServerError)
-		return
-	}
-	if results == nil {
-		results = []models.VaultSearchResult{}
-	}
-	writeJSON(w, map[string]any{"query": query, "count": len(results), "results": results})
-}
-
-func (r *Relay) apiListAllVaultDocs(w http.ResponseWriter) {
-	docs, err := r.DB.ListAllVaultDocs(500)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list vault docs"}`, http.StatusInternalServerError)
-		return
-	}
-
-	type docMeta struct {
-		Path      string `json:"path"`
-		Project   string `json:"project"`
-		Title     string `json:"title"`
-		Owner     string `json:"owner"`
-		Tags      string `json:"tags"`
-		SizeBytes int    `json:"size_bytes"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	metas := make([]docMeta, 0, len(docs))
-	for _, d := range docs {
-		metas = append(metas, docMeta{
-			Path: d.Path, Project: d.Project, Title: d.Title, Owner: d.Owner,
-			Tags: d.Tags, SizeBytes: d.SizeBytes, UpdatedAt: d.UpdatedAt,
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metas)
-}
-
-func (r *Relay) apiListVaultDocs(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-
-	var tags []string
-	if t := req.URL.Query().Get("tags"); t != "" {
-		_ = json.Unmarshal([]byte(t), &tags)
-	}
-
-	docs, err := r.DB.ListVaultDocs(project, tags, 200)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list vault docs"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// Return metadata only
-	type docMeta struct {
-		Path      string `json:"path"`
-		Project   string `json:"project"`
-		Title     string `json:"title"`
-		Owner     string `json:"owner"`
-		Tags      string `json:"tags"`
-		SizeBytes int    `json:"size_bytes"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	metas := make([]docMeta, 0, len(docs))
-	for _, d := range docs {
-		metas = append(metas, docMeta{
-			Path: d.Path, Project: d.Project, Title: d.Title, Owner: d.Owner,
-			Tags: d.Tags, SizeBytes: d.SizeBytes, UpdatedAt: d.UpdatedAt,
-		})
-	}
-	writeJSON(w, metas)
-}
-
-func (r *Relay) apiGetVaultDoc(w http.ResponseWriter, req *http.Request, path string) {
-	project := projectFromRequest(req)
-	docPath := strings.TrimPrefix(path, "/vault/doc/")
-	if docPath == "" {
-		http.Error(w, `{"error":"missing doc path"}`, http.StatusBadRequest)
-		return
-	}
-
-	doc, err := r.DB.GetVaultDoc(project, docPath)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get vault doc"}`, http.StatusInternalServerError)
-		return
-	}
-	if doc == nil {
-		http.Error(w, `{"error":"vault doc not found"}`, http.StatusNotFound)
-		return
-	}
-	writeJSON(w, doc)
-}
-
-func (r *Relay) apiUpdateVaultDoc(w http.ResponseWriter, req *http.Request, path string) {
-	project := projectFromRequest(req)
-	docPath := strings.TrimPrefix(path, "/vault/doc/")
-	if docPath == "" {
-		http.Error(w, `{"error":"missing doc path"}`, http.StatusBadRequest)
-		return
-	}
-
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
-		return
-	}
-	defer func() { _ = req.Body.Close() }()
-
-	var payload struct {
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Write to disk if vault config exists
-	cfg, err := r.DB.GetVaultConfig(project)
-	if err != nil || cfg == nil {
-		http.Error(w, `{"error":"no vault configured for project"}`, http.StatusBadRequest)
-		return
-	}
-
-	absPath := filepath.Join(cfg.Path, docPath)
-	// Read existing file to preserve frontmatter
-	existing, _ := os.ReadFile(absPath)
-	var newContent string
-	if fm := extractFrontmatter(string(existing)); fm != "" {
-		newContent = fm + "\n" + payload.Content
-	} else {
-		newContent = payload.Content
-	}
-
-	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-		apiError(w, http.StatusInternalServerError, "failed to write vault file", err)
-		return
-	}
-
-	// The fsnotify watcher will re-index automatically, but update DB now for immediate feedback
-	doc, _ := r.DB.GetVaultDoc(project, docPath)
-	if doc != nil {
-		doc.Content = payload.Content
-		doc.SizeBytes = len(newContent)
-		doc.UpdatedAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
-		_ = r.DB.UpsertVaultDoc(doc)
-	}
-
-	writeJSON(w, map[string]any{"ok": true})
-}
-
-// extractFrontmatter returns the raw frontmatter block (including delimiters) or empty string.
-func extractFrontmatter(content string) string {
-	if !strings.HasPrefix(content, "---\n") {
-		return ""
-	}
-	end := strings.Index(content[4:], "\n---")
-	if end < 0 {
-		return ""
-	}
-	return content[:end+4+4] // include closing ---
-}
-
-func (r *Relay) apiGetVaultStats(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	count, totalSize, err := r.DB.GetVaultStats(project)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get vault stats"}`, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{
-		"project":     project,
-		"doc_count":   count,
-		"total_bytes": totalSize,
-	})
 }
 
 func (r *Relay) apiGetFileLocks(w http.ResponseWriter, req *http.Request) {

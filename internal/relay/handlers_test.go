@@ -27,7 +27,7 @@ func testHandlers(t *testing.T) *Handlers {
 	mcpSrv := server.NewMCPServer("test", "0.0.0")
 	registry := NewSessionRegistry(mcpSrv)
 	events := NewEventBus()
-	return NewHandlers(database, registry, nil, nil, events)
+	return NewHandlers(database, registry, nil, events)
 }
 
 func call(args map[string]any) mcp.CallToolRequest {

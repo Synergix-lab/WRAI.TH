@@ -9,44 +9,22 @@ import (
 	"github.com/google/uuid"
 )
 
-const profileColumns = "id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, COALESCE(exit_prompt, ''), project, org_id, created_at, updated_at"
+// Profiles are slim identity cards: slug, name, role, and skills (for discovery
+// via find_profiles). The agent-OS execution fields (context_pack, vault_paths,
+// pool_size, exit_prompt, etc.) were removed with the spawn subsystem; their
+// columns may still exist in the table but are no longer read or written.
+const profileColumns = "id, slug, name, role, skills, project, org_id, created_at, updated_at"
 
 func scanProfile(row interface{ Scan(...any) error }) (models.Profile, error) {
 	var p models.Profile
-	err := row.Scan(&p.ID, &p.Slug, &p.Name, &p.Role, &p.ContextPack, &p.SoulKeys, &p.Skills, &p.VaultPaths, &p.AllowedTools, &p.PoolSize, &p.ExitPrompt, &p.Project, &p.OrgID, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.Slug, &p.Name, &p.Role, &p.Skills, &p.Project, &p.OrgID, &p.CreatedAt, &p.UpdatedAt)
 	return p, err
 }
 
-// ProfileOption sets optional fields when registering a profile.
-type ProfileOption func(*models.Profile)
-
-// WithAllowedTools sets the allowed tools for a profile.
-func WithAllowedTools(tools string) ProfileOption {
-	return func(p *models.Profile) { p.AllowedTools = tools }
-}
-
-// WithPoolSize sets the max concurrent spawns for a profile.
-func WithPoolSize(size int) ProfileOption {
-	return func(p *models.Profile) { p.PoolSize = size }
-}
-
-// WithExitPrompt overrides the default "when done, set_memory then exit"
-// boilerplate appended to the spawn prompt. Use this to chain the child's
-// final actions (message teammates, dispatch follow-ups) before exit.
-func WithExitPrompt(prompt string) ProfileOption {
-	return func(p *models.Profile) { p.ExitPrompt = prompt }
-}
-
-func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths string, opts ...ProfileOption) (*models.Profile, error) {
+func (d *DB) RegisterProfile(project, slug, name, role, skills string) (*models.Profile, error) {
 	now := time.Now().UTC().Format(memoryTimeFmt)
-	if soulKeys == "" {
-		soulKeys = "[]"
-	}
 	if skills == "" {
 		skills = "[]"
-	}
-	if vaultPaths == "" {
-		vaultPaths = "[]"
 	}
 
 	// Upsert: update if exists
@@ -57,26 +35,18 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 
 	if err == sql.ErrNoRows {
 		p := &models.Profile{
-			ID:           uuid.New().String(),
-			Slug:         slug,
-			Name:         name,
-			Role:         role,
-			ContextPack:  contextPack,
-			SoulKeys:     soulKeys,
-			Skills:       skills,
-			VaultPaths:   vaultPaths,
-			AllowedTools: "[]",
-			PoolSize:     3,
-			Project:      project,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		}
-		for _, opt := range opts {
-			opt(p)
+			ID:        uuid.New().String(),
+			Slug:      slug,
+			Name:      name,
+			Role:      role,
+			Skills:    skills,
+			Project:   project,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 		_, err := d.conn.Exec(
-			"INSERT INTO profiles (id, slug, name, role, context_pack, soul_keys, skills, vault_paths, allowed_tools, pool_size, exit_prompt, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.ID, p.Slug, p.Name, p.Role, p.ContextPack, p.SoulKeys, p.Skills, p.VaultPaths, p.AllowedTools, p.PoolSize, p.ExitPrompt, p.Project, p.CreatedAt, p.UpdatedAt,
+			"INSERT INTO profiles (id, slug, name, role, skills, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			p.ID, p.Slug, p.Name, p.Role, p.Skills, p.Project, p.CreatedAt, p.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert profile: %w", err)
@@ -87,37 +57,22 @@ func (d *DB) RegisterProfile(project, slug, name, role, contextPack, soulKeys, s
 		return nil, fmt.Errorf("query profile: %w", err)
 	}
 
-	// Update existing — PATCH semantics. An empty/default parameter preserves
-	// the existing value instead of wiping it. Previously a caller passing
-	// only (slug, name, vault_paths) would nuke context_pack, role, exit_prompt,
-	// allowed_tools, and pool_size back to empty.
+	// Update existing — PATCH semantics. An empty parameter preserves the
+	// existing value instead of wiping it.
 	if name != "" {
 		existing.Name = name
 	}
 	if role != "" {
 		existing.Role = role
 	}
-	if contextPack != "" {
-		existing.ContextPack = contextPack
-	}
-	if soulKeys != "" && soulKeys != "[]" {
-		existing.SoulKeys = soulKeys
-	}
 	if skills != "" && skills != "[]" {
 		existing.Skills = skills
 	}
-	if vaultPaths != "" && vaultPaths != "[]" {
-		existing.VaultPaths = vaultPaths
-	}
 	existing.UpdatedAt = now
-	// opts (WithAllowedTools, WithPoolSize, WithExitPrompt) always win when present.
-	for _, opt := range opts {
-		opt(&existing)
-	}
 
 	_, err = d.conn.Exec(
-		"UPDATE profiles SET name = ?, role = ?, context_pack = ?, soul_keys = ?, skills = ?, vault_paths = ?, allowed_tools = ?, pool_size = ?, exit_prompt = ?, updated_at = ? WHERE slug = ? AND project = ?",
-		existing.Name, existing.Role, existing.ContextPack, existing.SoulKeys, existing.Skills, existing.VaultPaths, existing.AllowedTools, existing.PoolSize, existing.ExitPrompt, now, slug, project,
+		"UPDATE profiles SET name = ?, role = ?, skills = ?, updated_at = ? WHERE slug = ? AND project = ?",
+		existing.Name, existing.Role, existing.Skills, now, slug, project,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update profile: %w", err)

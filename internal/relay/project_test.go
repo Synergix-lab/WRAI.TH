@@ -185,25 +185,3 @@ func TestProjectMessages_P0BypassesBudget(t *testing.T) {
 		t.Fatal("P0 message must bypass the budget")
 	}
 }
-
-func TestProjectVaultDoc_ShortDocPassThrough(t *testing.T) {
-	doc := "small content"
-	out := projectVaultDoc(doc, "x.md", 1000)
-	if out != doc {
-		t.Fatalf("short doc should be unchanged")
-	}
-}
-
-func TestProjectVaultDoc_LargeDocTruncatedWithMarker(t *testing.T) {
-	doc := strings.Repeat("a", 50000)
-	out := projectVaultDoc(doc, "big.md", 5000)
-	if len(out) > 5200 { // small slack for marker
-		t.Fatalf("truncated doc too large: len=%d", len(out))
-	}
-	if !strings.Contains(out, "truncated") {
-		t.Fatalf("truncation marker missing: %q", out[:200])
-	}
-	if !strings.Contains(out, "get_vault_doc") {
-		t.Fatalf("agent recovery hint missing")
-	}
-}
