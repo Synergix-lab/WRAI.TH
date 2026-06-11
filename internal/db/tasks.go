@@ -4,65 +4,116 @@ import (
 	"agent-relay/internal/models"
 	"agent-relay/internal/normalize"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+// blockedPeriod is one {start,end} window in the auto-stamped blocked_periods trail.
+type blockedPeriod struct {
+	Start string `json:"start"`
+	End   string `json:"end,omitempty"`
+}
+
+// openBlockedPeriod appends a new open {start: now} window to the existing JSON array.
+func openBlockedPeriod(existing, now string) string {
+	var periods []blockedPeriod
+	if existing != "" {
+		_ = json.Unmarshal([]byte(existing), &periods)
+	}
+	periods = append(periods, blockedPeriod{Start: now})
+	b, _ := json.Marshal(periods)
+	return string(b)
+}
+
+// closeBlockedPeriod sets end=now on the last open window. No-op if none is open.
+func closeBlockedPeriod(existing, now string) string {
+	var periods []blockedPeriod
+	if existing != "" {
+		_ = json.Unmarshal([]byte(existing), &periods)
+	}
+	for i := len(periods) - 1; i >= 0; i-- {
+		if periods[i].End == "" {
+			periods[i].End = now
+			break
+		}
+	}
+	if periods == nil {
+		return "[]"
+	}
+	b, _ := json.Marshal(periods)
+	return string(b)
+}
+
 // Valid task state transitions
 // "done" and "cancelled" are reachable from any state (flexible cleanup)
+// "in-review" sits between in-progress and done (the agent's "PR up" signal).
 var validTransitions = map[string][]string{
 	"pending":     {"accepted", "in-progress", "done", "cancelled"},
 	"accepted":    {"in-progress", "done", "cancelled"},
-	"in-progress": {"done", "blocked", "cancelled"},
-	"blocked":     {"in-progress", "done", "cancelled"},
+	"in-progress": {"in-review", "done", "blocked", "cancelled"},
+	"in-review":   {"in-progress", "done", "blocked", "cancelled"},
+	"blocked":     {"in-progress", "in-review", "done", "cancelled"},
 	"done":        {"cancelled"},
 	"cancelled":   {},
 }
 
-const taskColumns = "id, profile_slug, assigned_to, dispatched_by, title, description, priority, status, result, blocked_reason, project, dispatched_at, accepted_at, started_at, completed_at, parent_task_id, ack_notified_at, ack_escalated_at, board_id, goal_id, archived_at"
+const taskColumns = "id, profile_slug, assigned_to, dispatched_by, title, description, priority, status, result, blocked_reason, project, dispatched_at, accepted_at, started_at, completed_at, parent_task_id, ack_notified_at, ack_escalated_at, board_id, archived_at, " +
+	"source, linear_issue_id, linear_key, external_url, points, labels, linear_state, assignee, cycle_id, cycle_name, cycle_start, cycle_end, " +
+	"claimed_by, claimed_at, blocked_periods, in_review_at, done_at"
 
 func scanTask(row interface{ Scan(...any) error }) (models.Task, error) {
 	var t models.Task
 	err := row.Scan(&t.ID, &t.ProfileSlug, &t.AssignedTo, &t.DispatchedBy, &t.Title, &t.Description,
 		&t.Priority, &t.Status, &t.Result, &t.BlockedReason, &t.Project,
 		&t.DispatchedAt, &t.AcceptedAt, &t.StartedAt, &t.CompletedAt, &t.ParentTaskID,
-		&t.AckNotifiedAt, &t.AckEscalatedAt, &t.BoardID, &t.GoalID, &t.ArchivedAt)
+		&t.AckNotifiedAt, &t.AckEscalatedAt, &t.BoardID, &t.ArchivedAt,
+		&t.Source, &t.LinearIssueID, &t.LinearKey, &t.ExternalURL, &t.Points, &t.Labels,
+		&t.LinearState, &t.Assignee, &t.CycleID, &t.CycleName, &t.CycleStart, &t.CycleEnd,
+		&t.ClaimedBy, &t.ClaimedAt, &t.BlockedPeriods, &t.InReviewAt, &t.DoneAt)
 	return t, err
 }
 
-func (d *DB) DispatchTask(project, profileSlug, dispatchedBy, title, description, priority string, parentTaskID, boardID, goalID *string) (*models.Task, error) {
+func (d *DB) DispatchTask(project, profileSlug, dispatchedBy, title, description, priority string, parentTaskID, boardID *string) (*models.Task, error) {
 	now := time.Now().UTC().Format(memoryTimeFmt)
 	if priority == "" {
 		priority = "P2"
 	}
 
 	task := &models.Task{
-		ID:           uuid.New().String(),
-		ProfileSlug:  profileSlug,
-		DispatchedBy: dispatchedBy,
-		Title:        title,
-		Description:  description,
-		Priority:     priority,
-		Status:       "pending",
-		Project:      project,
-		DispatchedAt: now,
-		ParentTaskID: parentTaskID,
-		BoardID:      boardID,
-		GoalID:       goalID,
+		ID:             uuid.New().String(),
+		ProfileSlug:    profileSlug,
+		DispatchedBy:   dispatchedBy,
+		Title:          title,
+		Description:    description,
+		Priority:       priority,
+		Status:         "pending",
+		Project:        project,
+		DispatchedAt:   now,
+		ParentTaskID:   parentTaskID,
+		BoardID:        boardID,
+		Source:         "native",
+		Labels:         "[]",
+		BlockedPeriods: "[]",
 	}
 
 	_, err := d.conn.Exec(
-		`INSERT INTO tasks (id, profile_slug, dispatched_by, title, description, priority, status, project, dispatched_at, parent_task_id, board_id, goal_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tasks (id, profile_slug, dispatched_by, title, description, priority, status, project, dispatched_at, parent_task_id, board_id, source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'native')`,
 		task.ID, task.ProfileSlug, task.DispatchedBy, task.Title, task.Description,
-		task.Priority, task.Status, task.Project, task.DispatchedAt, task.ParentTaskID, task.BoardID, task.GoalID,
+		task.Priority, task.Status, task.Project, task.DispatchedAt, task.ParentTaskID, task.BoardID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dispatch task: %w", err)
 	}
 	return task, nil
+}
+
+// ReviewTask transitions a task to in-review (the agent's "PR up" signal).
+func (d *DB) ReviewTask(taskID, agentName, project string) (*models.Task, error) {
+	return d.transitionTask(taskID, agentName, project, "in-review", nil, nil)
 }
 
 func (d *DB) ResetTask(taskID, agentName, project string) (*models.Task, error) {
@@ -115,7 +166,12 @@ func (d *DB) transitionTask(taskID, agentName, project, newStatus string, result
 		}
 	}
 
-	// Build update
+	// Was the task blocked before this transition? If so, any transition OUT of
+	// blocked closes the open blocked window in the auto-stamped trail.
+	leavingBlocked := task.Status == "blocked" && newStatus != "blocked"
+
+	// Build update. Every transition auto-stamps its temporal trail with zero
+	// manual input.
 	task.Status = newStatus
 	switch newStatus {
 	case "pending":
@@ -125,45 +181,100 @@ func (d *DB) transitionTask(taskID, agentName, project, newStatus string, result
 		task.CompletedAt = nil
 		task.Result = nil
 		task.BlockedReason = nil
+		task.ClaimedBy = nil
+		task.ClaimedAt = nil
+		task.InReviewAt = nil
+		task.DoneAt = nil
+		task.BlockedPeriods = "[]"
 		_, err = d.conn.Exec(
-			"UPDATE tasks SET status = ?, assigned_to = NULL, accepted_at = NULL, started_at = NULL, completed_at = NULL, result = NULL, blocked_reason = NULL WHERE id = ? AND project = ?",
+			"UPDATE tasks SET status = ?, assigned_to = NULL, accepted_at = NULL, started_at = NULL, completed_at = NULL, result = NULL, blocked_reason = NULL, claimed_by = NULL, claimed_at = NULL, in_review_at = NULL, done_at = NULL, blocked_periods = '[]' WHERE id = ? AND project = ?",
 			newStatus, taskID, project,
 		)
 	case "accepted":
+		// claim → claimed_at + claimed_by (also sets assigned_to + accepted_at)
 		task.AssignedTo = &agentName
 		task.AcceptedAt = &now
+		task.ClaimedBy = &agentName
+		task.ClaimedAt = &now
 		_, err = d.conn.Exec(
-			"UPDATE tasks SET status = ?, assigned_to = ?, accepted_at = ? WHERE id = ? AND project = ?",
-			newStatus, agentName, now, taskID, project,
+			"UPDATE tasks SET status = ?, assigned_to = ?, accepted_at = ?, claimed_by = ?, claimed_at = ? WHERE id = ? AND project = ?",
+			newStatus, agentName, now, agentName, now, taskID, project,
 		)
 	case "in-progress":
+		// start → started_at (and close any open blocked window on resume)
 		task.AssignedTo = &agentName
 		task.StartedAt = &now
-		_, err = d.conn.Exec(
-			"UPDATE tasks SET status = ?, assigned_to = ?, started_at = ? WHERE id = ? AND project = ?",
-			newStatus, agentName, now, taskID, project,
-		)
+		if leavingBlocked {
+			task.BlockedPeriods = closeBlockedPeriod(task.BlockedPeriods, now)
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, assigned_to = ?, started_at = ?, blocked_periods = ? WHERE id = ? AND project = ?",
+				newStatus, agentName, now, task.BlockedPeriods, taskID, project,
+			)
+		} else {
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, assigned_to = ?, started_at = ? WHERE id = ? AND project = ?",
+				newStatus, agentName, now, taskID, project,
+			)
+		}
+	case "in-review":
+		// in-review → in_review_at (close any open blocked window if resuming via review)
+		task.InReviewAt = &now
+		if task.AssignedTo == nil {
+			task.AssignedTo = &agentName
+		}
+		if leavingBlocked {
+			task.BlockedPeriods = closeBlockedPeriod(task.BlockedPeriods, now)
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, assigned_to = COALESCE(assigned_to, ?), in_review_at = ?, blocked_periods = ? WHERE id = ? AND project = ?",
+				newStatus, agentName, now, task.BlockedPeriods, taskID, project,
+			)
+		} else {
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, assigned_to = COALESCE(assigned_to, ?), in_review_at = ? WHERE id = ? AND project = ?",
+				newStatus, agentName, now, taskID, project,
+			)
+		}
 	case "done":
+		// done → done_at (alias of completed_at, stamped together)
 		task.CompletedAt = &now
+		task.DoneAt = &now
 		result = normalizePtr(result)
 		task.Result = result
-		_, err = d.conn.Exec(
-			"UPDATE tasks SET status = ?, result = ?, completed_at = ? WHERE id = ? AND project = ?",
-			newStatus, result, now, taskID, project,
-		)
+		if leavingBlocked {
+			task.BlockedPeriods = closeBlockedPeriod(task.BlockedPeriods, now)
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, result = ?, completed_at = ?, done_at = ?, blocked_periods = ? WHERE id = ? AND project = ?",
+				newStatus, result, now, now, task.BlockedPeriods, taskID, project,
+			)
+		} else {
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, result = ?, completed_at = ?, done_at = ? WHERE id = ? AND project = ?",
+				newStatus, result, now, now, taskID, project,
+			)
+		}
 	case "blocked":
+		// block → append {start: now} to blocked_periods
 		task.BlockedReason = blockedReason
+		task.BlockedPeriods = openBlockedPeriod(task.BlockedPeriods, now)
 		_, err = d.conn.Exec(
-			"UPDATE tasks SET status = ?, blocked_reason = ? WHERE id = ? AND project = ?",
-			newStatus, blockedReason, taskID, project,
+			"UPDATE tasks SET status = ?, blocked_reason = ?, blocked_periods = ? WHERE id = ? AND project = ?",
+			newStatus, blockedReason, task.BlockedPeriods, taskID, project,
 		)
 	case "cancelled":
 		task.CompletedAt = &now
 		task.BlockedReason = blockedReason // reuse as cancellation reason
-		_, err = d.conn.Exec(
-			"UPDATE tasks SET status = ?, blocked_reason = ?, completed_at = ? WHERE id = ? AND project = ?",
-			newStatus, blockedReason, now, taskID, project,
-		)
+		if leavingBlocked {
+			task.BlockedPeriods = closeBlockedPeriod(task.BlockedPeriods, now)
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, blocked_reason = ?, completed_at = ?, blocked_periods = ? WHERE id = ? AND project = ?",
+				newStatus, blockedReason, now, task.BlockedPeriods, taskID, project,
+			)
+		} else {
+			_, err = d.conn.Exec(
+				"UPDATE tasks SET status = ?, blocked_reason = ?, completed_at = ? WHERE id = ? AND project = ?",
+				newStatus, blockedReason, now, taskID, project,
+			)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("update task status: %w", err)
@@ -440,7 +551,7 @@ func (d *DB) ListAllTasks(limit int) ([]models.Task, error) {
 	return tasks, rows.Err()
 }
 
-func (d *DB) UpdateTaskFields(taskID, project string, title, description, priority, boardID, goalID *string) (*models.Task, error) {
+func (d *DB) UpdateTaskFields(taskID, project string, title, description, priority, boardID *string) (*models.Task, error) {
 	task, err := d.GetTask(taskID, project)
 	if err != nil {
 		return nil, err
@@ -461,13 +572,10 @@ func (d *DB) UpdateTaskFields(taskID, project string, title, description, priori
 	if boardID != nil {
 		task.BoardID = boardID
 	}
-	if goalID != nil {
-		task.GoalID = goalID
-	}
 
 	_, err = d.conn.Exec(
-		"UPDATE tasks SET title = ?, description = ?, priority = ?, board_id = ?, goal_id = ? WHERE id = ? AND project = ?",
-		task.Title, task.Description, task.Priority, task.BoardID, task.GoalID, taskID, project,
+		"UPDATE tasks SET title = ?, description = ?, priority = ?, board_id = ? WHERE id = ? AND project = ?",
+		task.Title, task.Description, task.Priority, task.BoardID, taskID, project,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update task: %w", err)

@@ -12,9 +12,7 @@ export class APIClient {
     this._msgTimer = null;
     this._convTimer = null;
     this._taskTimer = null;
-    this._goalTimer = null;
     this._running = false;
-    this.onGoals = null;
   }
 
   start() {
@@ -38,9 +36,6 @@ export class APIClient {
 
     // Poll tasks every 3s
     this._taskTimer = setInterval(() => this.fetchLatestTasks(), 3000);
-
-    // Poll goals every 10s
-    this._goalTimer = setInterval(() => this._refreshGoals(), 10000);
 
     // SSE for real-time activity + agent status (<100ms)
     this._sseConnected = false;
@@ -82,7 +77,6 @@ export class APIClient {
     clearInterval(this._msgTimer);
     clearInterval(this._convTimer);
     clearInterval(this._taskTimer);
-    clearInterval(this._goalTimer);
     if (this._activitySource) this._activitySource.close();
     clearInterval(this._activityTimer);
   }
@@ -226,78 +220,6 @@ export class APIClient {
         body: JSON.stringify({ chosen_value: chosenValue, project, scope }),
       });
       return res.ok ? await res.json() : null;
-    } catch {
-      return null;
-    }
-  }
-
-  async _refreshGoals() {
-    if (this.onGoals) {
-      const goals = await this.fetchAllGoals();
-      this.onGoals(goals);
-    }
-  }
-
-  // --- Goal API ---
-
-  async fetchAllGoals() {
-    try {
-      const res = await fetch("/api/goals/all");
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async fetchGoals(params = {}) {
-    try {
-      const qs = new URLSearchParams();
-      if (params.project) qs.set("project", params.project);
-      if (params.type) qs.set("type", params.type);
-      if (params.status) qs.set("status", params.status);
-      const res = await fetch(`/api/goals?${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async fetchGoalCascade(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : "";
-      const res = await fetch(`/api/goals/cascade${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async createGoal(data) {
-    try {
-      const res = await fetch("/api/goals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
-  }
-
-  async updateGoal(goalId, data) {
-    try {
-      const res = await fetch(`/api/goals/${goalId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) return null;
-      return await res.json();
     } catch {
       return null;
     }

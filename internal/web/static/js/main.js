@@ -2061,114 +2061,6 @@ function getViewFilteredTasks() {
   return allTasks;
 }
 
-// --- Quest Tracker HUD ---
-
-const questTracker = document.getElementById("quest-tracker");
-const questTrackerBody = document.getElementById("quest-tracker-body");
-const qtToggle = document.getElementById("qt-toggle");
-const qtHeader = document.getElementById("quest-tracker-header");
-
-if (qtHeader) {
-  qtHeader.addEventListener("click", () => {
-    questTracker.classList.toggle("collapsed");
-  });
-}
-
-let _questCache = [];
-
-async function updateQuestTracker() {
-  if (!focusedProject) {
-    if (questTracker) questTracker.classList.add("hidden");
-    return;
-  }
-  const cascade = await client.fetchGoalCascade(focusedProject);
-  _questCache = cascade;
-  renderQuestTracker(cascade);
-}
-
-function renderQuestTracker(goals) {
-  if (!questTrackerBody || !questTracker) return;
-
-  // Show only in colony view
-  if (viewMode !== "colony") {
-    questTracker.classList.add("hidden");
-    return;
-  }
-
-  if (!goals || goals.length === 0) {
-    questTracker.classList.add("hidden");
-    return;
-  }
-
-  questTracker.classList.remove("hidden");
-
-  const statusIcon = (status) => {
-    switch (status) {
-      case "done": case "completed": return `<span class="qt-task-icon done">\u2714</span>`;
-      case "in-progress": case "in_progress": return `<span class="qt-task-icon in-progress">\u25B6</span>`;
-      case "blocked": return `<span class="qt-task-icon blocked">\u2716</span>`;
-      default: return `<span class="qt-task-icon pending">\u25CB</span>`;
-    }
-  };
-
-  const krIcon = (g) => {
-    if (g.progress >= 1) return `<span class="qt-kr-icon done">\u2714</span>`;
-    if (g.progress > 0) return `<span class="qt-kr-icon active">\u25B6</span>`;
-    return `<span class="qt-kr-icon pending">\u25CB</span>`;
-  };
-
-  const progressBar = (progress) => {
-    const pct = Math.round(progress * 100);
-    const cls = pct >= 100 ? "green" : pct > 0 ? "yellow" : "red";
-    return `<div class="qt-progress"><div class="qt-progress-fill ${cls}" style="width:${pct}%"></div></div>`;
-  };
-
-  // Recursive renderer — supports any goal type at any depth
-  const renderGoal = (g, depth) => {
-    let out = "";
-    if (depth === 0) {
-      // Root level = mission style
-      out += `<div class="qt-mission">`;
-      out += `<div class="qt-mission-title">${esc(g.title)}</div>`;
-      out += progressBar(g.progress);
-    } else if (depth === 1) {
-      // Objective level
-      const pct = Math.round(g.progress * 100);
-      out += `<div class="qt-objective">`;
-      out += `<div class="qt-obj-row"><span class="qt-obj-title">${esc(g.title)}</span><span class="qt-obj-pct">${pct}%</span></div>`;
-      out += progressBar(g.progress);
-    } else {
-      // Key result / leaf level
-      out += `<div class="qt-kr"><div class="qt-kr-row">`;
-      out += krIcon(g);
-      out += `<span class="qt-kr-title">${esc(g.title)}</span>`;
-      if (g.owner_agent) out += `<span class="qt-kr-agent">${esc(g.owner_agent)}</span>`;
-      out += `</div></div>`;
-    }
-
-    if (g.children && g.children.length > 0) {
-      for (const child of g.children) {
-        out += renderGoal(child, depth + 1);
-      }
-    }
-
-    if (depth <= 1) out += `</div>`;
-    return out;
-  };
-
-  let html = "";
-  for (const g of goals) {
-    html += renderGoal(g, 0);
-  }
-
-  if (!html) {
-    questTracker.classList.add("hidden");
-    return;
-  }
-
-  questTrackerBody.innerHTML = html;
-}
-
 function esc(s) {
   if (!s) return "";
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -2446,15 +2338,11 @@ function setMode(mode) {
   // Show/hide kanban — fetch + render BEFORE making panel visible
   if (mode === "kanban") {
     const boardsFetch = focusedProject ? client.fetchBoards(focusedProject) : client.fetchAllBoards();
-    Promise.all([client.fetchAllTasks(), boardsFetch, client.fetchAllGoals()]).then(([tasks, boards, goals]) => {
+    Promise.all([client.fetchAllTasks(), boardsFetch]).then(([tasks, boards]) => {
       allTasks = tasks;
       // Batch data + set fingerprints to prevent redundant re-renders from polling
       kanbanBoard.boards = boards || [];
       kanbanBoard._boardsFP = kanbanBoard._fingerprint(kanbanBoard.boards);
-      kanbanBoard.goals = goals || [];
-      kanbanBoard._goalsFP = kanbanBoard._fingerprint(kanbanBoard.goals);
-      kanbanBoard.goalMap.clear();
-      for (const g of kanbanBoard.goals) kanbanBoard.goalMap.set(g.id, g);
       kanbanBoard.tasks = getViewFilteredTasks();
       kanbanBoard._tasksFP = kanbanBoard._fingerprint(kanbanBoard.tasks);
       // Single full render, then show
@@ -2664,7 +2552,6 @@ function setViewMode(mode, project) {
     detailPanel.classList.remove("open");
     document.getElementById("main").classList.remove("agent-focused");
     setMode("canvas");
-    if (questTracker) questTracker.classList.add("hidden");
     stopTokenPolling();
     startGalaxyTokenPolling();
     commandPanel.hide();
@@ -2681,7 +2568,6 @@ function setViewMode(mode, project) {
     requestAnimationFrame(() => { engine.resize(); layoutAgents(); updateHierarchyLinks(); });
     loadMessages();
     if (activeTab === "tasks") renderTasks();
-    updateQuestTracker();
     // Reset counters and start live polling
     stopGalaxyTokenPolling();
     _tokenCurrent = { tokens: 0, calls: 0 };
@@ -2927,7 +2813,6 @@ kanbanBoard.onDispatch = async (data) => {
     description: data.description,
     priority: data.priority,
     parent_task_id: data.parent_task_id || undefined,
-    goal_id: data.goal_id || undefined,
   });
   if (result) {
     allTasks.push(result);
@@ -3083,11 +2968,6 @@ commandPanel.onNavigate = (arg) => {
   }
 };
 
-client.onGoals = (goals) => {
-  if (currentMode === "kanban") {
-    kanbanBoard.setGoals(goals);
-  }
-};
 _loadDysonSettings();
 // Defer start to after first paint so canvas has correct dimensions
 requestAnimationFrame(() => {
@@ -3099,7 +2979,6 @@ requestAnimationFrame(() => {
   fetchProjectsData();
   _teamsFetchTimer = setInterval(fetchTeamsData, 10000);
   setInterval(fetchProjectsData, 10000);
-  setInterval(() => { if (viewMode === "colony") updateQuestTracker(); }, 15000);
   setInterval(fetchFileLockData, 5000);
   startGalaxyTokenPolling();
   console.log("[relay] polling started");

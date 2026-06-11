@@ -123,19 +123,6 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiGetTeams(w, req)
 	case strings.HasPrefix(path, "/teams/") && strings.HasSuffix(path, "/members") && req.Method == http.MethodGet:
 		r.apiGetTeamMembers(w, req, path)
-	// Goal endpoints
-	case path == "/goals/all" && req.Method == http.MethodGet:
-		r.apiGetAllGoals(w)
-	case path == "/goals/cascade" && req.Method == http.MethodGet:
-		r.apiGetGoalCascade(w, req)
-	case path == "/goals" && req.Method == http.MethodGet:
-		r.apiGetGoals(w, req)
-	case path == "/goals" && req.Method == http.MethodPost:
-		r.apiCreateGoal(w, req)
-	case strings.HasPrefix(path, "/goals/") && req.Method == http.MethodPut:
-		r.apiUpdateGoal(w, req, path)
-	case strings.HasPrefix(path, "/goals/") && req.Method == http.MethodGet:
-		r.apiGetGoal(w, req, path)
 	// Board endpoints
 	case path == "/boards" && req.Method == http.MethodGet:
 		r.apiGetBoards(w, req)
@@ -183,12 +170,23 @@ func (r *Relay) apiHealth(w http.ResponseWriter) {
 		v = "dev"
 	}
 	writeJSON(w, map[string]any{
-		"status":  "ok",
-		"version": v,
-		"uptime":  time.Since(r.StartedAt).String(),
-		"started": r.StartedAt.Format(time.RFC3339),
-		"db":      stats,
+		"status":      "ok",
+		"version":     v,
+		"uptime":      time.Since(r.StartedAt).String(),
+		"started":     r.StartedAt.Format(time.RFC3339),
+		"db":          stats,
+		"linear_mode": r.Config.LinearMode,
+		"mode":        modeString(r.Config.LinearMode),
 	})
+}
+
+// modeString maps the linear_mode flag to a human-readable mode label the web
+// UI uses to switch behavior (writable native board vs. read-replica mirror).
+func modeString(linear bool) string {
+	if linear {
+		return "linear"
+	}
+	return "native"
 }
 
 func (r *Relay) apiGetProject(w http.ResponseWriter, name string) {
@@ -240,7 +238,11 @@ func (r *Relay) apiGetSettings(w http.ResponseWriter) {
 	if sunType == "" {
 		sunType = "1"
 	}
-	writeJSON(w, map[string]string{"sun_type": sunType})
+	writeJSON(w, map[string]any{
+		"sun_type":    sunType,
+		"linear_mode": r.Config.LinearMode,
+		"mode":        modeString(r.Config.LinearMode),
+	})
 }
 
 func (r *Relay) apiPutSetting(w http.ResponseWriter, req *http.Request) {
@@ -1056,7 +1058,6 @@ func (r *Relay) apiDispatchTask(w http.ResponseWriter, req *http.Request) {
 		Priority     string  `json:"priority"`
 		ParentTaskID *string `json:"parent_task_id,omitempty"`
 		BoardID      *string `json:"board_id,omitempty"`
-		GoalID       *string `json:"goal_id,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
@@ -1070,7 +1071,7 @@ func (r *Relay) apiDispatchTask(w http.ResponseWriter, req *http.Request) {
 		body.Project = "default"
 	}
 
-	task, err := r.DB.DispatchTask(body.Project, body.Profile, "user", body.Title, body.Description, body.Priority, body.ParentTaskID, body.BoardID, body.GoalID)
+	task, err := r.DB.DispatchTask(body.Project, body.Profile, "user", body.Title, body.Description, body.Priority, body.ParentTaskID, body.BoardID)
 	if err != nil {
 		apiError(w, http.StatusInternalServerError, "failed to dispatch task", err)
 		return
@@ -1118,6 +1119,8 @@ func (r *Relay) apiTransitionTask(w http.ResponseWriter, req *http.Request, path
 		task, err = r.DB.ClaimTask(taskID, body.Agent, body.Project)
 	case "in-progress":
 		task, err = r.DB.StartTask(taskID, body.Agent, body.Project)
+	case "in-review":
+		task, err = r.DB.ReviewTask(taskID, body.Agent, body.Project)
 	case "done":
 		task, err = r.DB.CompleteTask(taskID, body.Agent, body.Project, body.Result)
 	case "blocked":
@@ -1149,7 +1152,6 @@ func (r *Relay) apiUpdateTask(w http.ResponseWriter, req *http.Request, path str
 		Description *string `json:"description,omitempty"`
 		Priority    *string `json:"priority,omitempty"`
 		BoardID     *string `json:"board_id,omitempty"`
-		GoalID      *string `json:"goal_id,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
@@ -1159,7 +1161,7 @@ func (r *Relay) apiUpdateTask(w http.ResponseWriter, req *http.Request, path str
 		body.Project = "default"
 	}
 
-	task, err := r.DB.UpdateTaskFields(taskID, body.Project, body.Title, body.Description, body.Priority, body.BoardID, body.GoalID)
+	task, err := r.DB.UpdateTaskFields(taskID, body.Project, body.Title, body.Description, body.Priority, body.BoardID)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, "failed to update task", err)
 		return
@@ -1302,127 +1304,6 @@ func (r *Relay) apiGetProfile(w http.ResponseWriter, req *http.Request, path str
 		return
 	}
 	writeJSON(w, profile)
-}
-
-// --- Goal API endpoints ---
-
-func (r *Relay) apiGetAllGoals(w http.ResponseWriter) {
-	goals, err := r.DB.ListAllGoals(200)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list goals"}`, http.StatusInternalServerError)
-		return
-	}
-	if goals == nil {
-		goals = []models.Goal{}
-	}
-	writeJSON(w, goals)
-}
-
-func (r *Relay) apiGetGoals(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	goalType := req.URL.Query().Get("type")
-	status := req.URL.Query().Get("status")
-
-	goals, err := r.DB.ListGoals(project, goalType, status, nil, 100)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list goals"}`, http.StatusInternalServerError)
-		return
-	}
-	if goals == nil {
-		goals = []models.Goal{}
-	}
-	writeJSON(w, goals)
-}
-
-func (r *Relay) apiGetGoalCascade(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	cascade, err := r.DB.GetGoalCascade(project)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get goal cascade"}`, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, cascade)
-}
-
-func (r *Relay) apiCreateGoal(w http.ResponseWriter, req *http.Request) {
-	var body struct {
-		Project      string  `json:"project"`
-		Type         string  `json:"type"`
-		Title        string  `json:"title"`
-		Description  string  `json:"description"`
-		OwnerAgent   *string `json:"owner_agent,omitempty"`
-		ParentGoalID *string `json:"parent_goal_id,omitempty"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Title == "" {
-		http.Error(w, `{"error":"title is required"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Project == "" {
-		body.Project = "default"
-	}
-	if body.Type == "" {
-		body.Type = "agent_goal"
-	}
-
-	goal, err := r.DB.CreateGoal(body.Project, body.Type, body.Title, body.Description, "user", body.OwnerAgent, body.ParentGoalID)
-	if err != nil {
-		apiError(w, http.StatusInternalServerError, "failed to create goal", err)
-		return
-	}
-	writeJSON(w, goal)
-}
-
-func (r *Relay) apiUpdateGoal(w http.ResponseWriter, req *http.Request, path string) {
-	goalID := strings.TrimPrefix(path, "/goals/")
-	if goalID == "" {
-		http.Error(w, `{"error":"missing goal id"}`, http.StatusBadRequest)
-		return
-	}
-
-	var body struct {
-		Project     string  `json:"project"`
-		Title       *string `json:"title,omitempty"`
-		Description *string `json:"description,omitempty"`
-		Status      *string `json:"status,omitempty"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Project == "" {
-		body.Project = "default"
-	}
-
-	goal, err := r.DB.UpdateGoal(goalID, body.Project, body.Title, body.Description, body.Status)
-	if err != nil {
-		apiError(w, http.StatusBadRequest, "failed to update goal", err)
-		return
-	}
-	writeJSON(w, goal)
-}
-
-func (r *Relay) apiGetGoal(w http.ResponseWriter, req *http.Request, path string) {
-	project := projectFromRequest(req)
-	goalID := strings.TrimPrefix(path, "/goals/")
-	if goalID == "" {
-		http.Error(w, `{"error":"missing goal id"}`, http.StatusBadRequest)
-		return
-	}
-
-	gwp, err := r.DB.GetGoalWithProgress(goalID, project)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get goal"}`, http.StatusInternalServerError)
-		return
-	}
-	if gwp == nil {
-		http.Error(w, `{"error":"goal not found"}`, http.StatusNotFound)
-		return
-	}
-	writeJSON(w, gwp)
 }
 
 func (r *Relay) apiGetBoards(w http.ResponseWriter, req *http.Request) {

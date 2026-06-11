@@ -801,10 +801,7 @@ export class KanbanBoard {
     this.container = container;
     this.tasks = [];
     this.boards = [];
-    this.goals = [];
-    this.goalMap = new Map(); // id -> goal
     this.selectedBoard = null; // null = all tasks
-    this.selectedGoal = null;  // null = all goals
     this.showDone = false;
     this.expandedCard = null;
     this.dragTaskId = null;
@@ -847,7 +844,7 @@ export class KanbanBoard {
     for (const item of arr) {
       const s = item.id + '|' + (item.status || '') + '|' + (item.title || '') + '|' +
         (item.priority || '') + '|' + (item.assigned_to || '') + '|' + (item.board_id || '') +
-        '|' + (item.goal_id || '') + '|' + (item.description || '');
+        '|' + (item.description || '');
       for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
     }
     return h;
@@ -869,20 +866,6 @@ export class KanbanBoard {
     if (fp === this._boardsFP && incoming.length === this.boards.length) return;
     this.boards = incoming;
     this._boardsFP = fp;
-    if (this._overlay) return;
-    this._scheduleRender();
-  }
-
-  setGoals(goals) {
-    const incoming = goals || [];
-    const fp = this._fingerprint(incoming);
-    if (fp === this._goalsFP && incoming.length === this.goals.length) return;
-    this.goals = incoming;
-    this._goalsFP = fp;
-    this.goalMap.clear();
-    for (const g of this.goals) {
-      this.goalMap.set(g.id, g);
-    }
     if (this._overlay) return;
     this._scheduleRender();
   }
@@ -1109,9 +1092,6 @@ export class KanbanBoard {
         (t.board_id && t.board_id.startsWith(this.selectedBoard))
       );
     }
-    if (this.selectedGoal !== null) {
-      filtered = filtered.filter(t => t.goal_id === this.selectedGoal);
-    }
     if (!this.showDone) {
       filtered = filtered.filter(t => t.status !== 'done' && t.status !== 'cancelled');
     }
@@ -1220,16 +1200,6 @@ export class KanbanBoard {
       <span class="kb-time" data-dispatched="${esc(task.dispatched_at)}">${timeAgo(task.dispatched_at)}</span>
     `;
     card.appendChild(top);
-
-    // Goal badge
-    if (task.goal_id && this.goalMap.has(task.goal_id)) {
-      const goal = this.goalMap.get(task.goal_id);
-      const goalBadge = document.createElement('div');
-      goalBadge.style.cssText = 'font-size:9px;font-weight:600;color:#ffd93d;margin-bottom:3px;letter-spacing:0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-      goalBadge.textContent = goal.title;
-      goalBadge.title = `[${goal.type}] ${goal.title}`;
-      card.appendChild(goalBadge);
-    }
 
     // Title
     const title = document.createElement('div');
@@ -1370,14 +1340,6 @@ export class KanbanBoard {
     detail.className = 'kb-detail';
 
     let html = '';
-
-    // Goal ancestry
-    if (task.goal_id && this.goalMap.has(task.goal_id)) {
-      const chain = this._buildGoalChain(task.goal_id);
-      if (chain.length > 0) {
-        html += `<div class="kb-detail-row"><span class="kb-detail-label">Goal Cascade</span><div style="margin:3px 0;color:#ffd93d;font-size:10px">${chain.map(g => esc(g.title)).join(' &rsaquo; ')}</div></div>`;
-      }
-    }
 
     if (task.description) {
       html += `<div class="kb-detail-row"><span class="kb-detail-label">Description</span><div class="kb-detail-desc">${esc(task.description)}</div></div>`;
@@ -1645,13 +1607,6 @@ export class KanbanBoard {
         <label>Parent Task ID (optional)</label>
         <input type="text" name="parent_task_id" placeholder="parent-task-uuid" autocomplete="off" />
       </div>
-      <div class="kb-field">
-        <label>Goal (optional)</label>
-        <select name="goal_id">
-          <option value="">— None —</option>
-          ${this.goals.map(g => `<option value="${esc(g.id)}">[${esc(g.type)}] ${esc(g.title)}</option>`).join('')}
-        </select>
-      </div>
       <div class="kb-form-btns">
         <button class="kb-form-btn kb-form-btn--cancel" type="button">Cancel</button>
         <button class="kb-form-btn kb-form-btn--submit" type="button">Dispatch</button>
@@ -1684,13 +1639,11 @@ export class KanbanBoard {
       const description = this._serializeDescription(rawDesc, dispatchChecklistItems);
       const priority = form.querySelector('[name="priority"]').value;
       const parentId = form.querySelector('[name="parent_task_id"]').value.trim();
-      const goalId = form.querySelector('[name="goal_id"]').value;
 
       if (!profile || !title) return;
 
       const data = { profile, title, description, priority };
       if (parentId) data.parent_task_id = parentId;
-      if (goalId) data.goal_id = goalId;
 
       if (this.onDispatch) this.onDispatch(data);
       this._closeDispatchForm();
@@ -1781,13 +1734,6 @@ export class KanbanBoard {
         </div>
       </div>
       <div class="kb-field">
-        <label>Goal (optional)</label>
-        <select name="goal_id">
-          <option value="">— None —</option>
-          ${this.goals.map(g => `<option value="${esc(g.id)}"${task.goal_id === g.id ? ' selected' : ''}>[${esc(g.type)}] ${esc(g.title)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="kb-field">
         <label>Board (optional)</label>
         <select name="board_id">
           <option value="">— Default —</option>
@@ -1825,13 +1771,11 @@ export class KanbanBoard {
       const description = this._serializeDescription(rawDesc, editChecklistItems);
       const priority = form.querySelector('[name="priority"]').value;
       const status = form.querySelector('[name="status"]').value;
-      const goalId = form.querySelector('[name="goal_id"]').value;
       const boardId = form.querySelector('[name="board_id"]').value;
       const assignedTo = form.querySelector('[name="assigned_to"]').value.trim();
       if (!title) return;
       const data = { title, description, priority };
       if (status) data.status = status;
-      if (goalId) data.goal_id = goalId;
       if (boardId) data.board_id = boardId;
       if (assignedTo) data.assigned_to = assignedTo;
       if (this.onEdit) this.onEdit(task.id, task.project || 'default', data);
@@ -1858,19 +1802,5 @@ export class KanbanBoard {
     this.root.querySelectorAll('.kb-time[data-dispatched]').forEach(el => {
       el.textContent = timeAgo(el.dataset.dispatched);
     });
-  }
-
-  _buildGoalChain(goalId) {
-    const chain = [];
-    let current = goalId;
-    const visited = new Set();
-    while (current && !visited.has(current) && chain.length < 5) {
-      visited.add(current);
-      const g = this.goalMap.get(current);
-      if (!g) break;
-      chain.unshift(g);
-      current = g.parent_goal_id;
-    }
-    return chain;
   }
 }

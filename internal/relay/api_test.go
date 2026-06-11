@@ -422,7 +422,7 @@ func TestAPITaskTransition(t *testing.T) {
 	r := testRelay(t)
 	_, _, _ = r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil, "[]", 0)
 
-	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "task1", "", "P2", nil, nil, nil)
+	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "task1", "", "P2", nil, nil)
 
 	// Claim (status=accepted)
 	w := doAPI(r, "POST", "/tasks/"+task.ID+"/transition", `{"project":"p1","agent":"bot-a","status":"accepted"}`)
@@ -458,8 +458,8 @@ func TestAPITaskTransition(t *testing.T) {
 func TestAPIGetAllTasks(t *testing.T) {
 	r := testRelay(t)
 	_, _, _ = r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil, "[]", 0)
-	_, _ = r.DB.DispatchTask("p1", "dev", "bot-a", "task1", "", "P2", nil, nil, nil)
-	_, _ = r.DB.DispatchTask("p1", "dev", "bot-a", "task2", "", "P1", nil, nil, nil)
+	_, _ = r.DB.DispatchTask("p1", "dev", "bot-a", "task1", "", "P2", nil, nil)
+	_, _ = r.DB.DispatchTask("p1", "dev", "bot-a", "task2", "", "P1", nil, nil)
 
 	w := doAPI(r, "GET", "/tasks/all", "")
 	if w.Code != http.StatusOK {
@@ -498,42 +498,6 @@ func TestAPIGetProfile(t *testing.T) {
 	profile := decodeJSON(t, w)
 	if profile["slug"] != "backend" {
 		t.Errorf("expected backend, got %v", profile["slug"])
-	}
-}
-
-// --- Goal API Tests ---
-
-func TestAPIGoalCRUD(t *testing.T) {
-	r := testRelay(t)
-
-	// Create
-	w := doAPI(r, "POST", "/goals", `{"project":"p1","title":"Ship v2","type":"agent_goal"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	goal := decodeJSON(t, w)
-	goalID := goal["id"].(string)
-
-	// Get
-	w2 := doAPI(r, "GET", "/goals/"+goalID+"?project=p1", "")
-	if w2.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w2.Code)
-	}
-
-	// Update
-	w3 := doAPI(r, "PUT", "/goals/"+goalID, `{"project":"p1","status":"completed"}`)
-	if w3.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w3.Code, w3.Body.String())
-	}
-
-	// List
-	w4 := doAPI(r, "GET", "/goals?project=p1", "")
-	if w4.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w4.Code)
-	}
-	goals := decodeJSONArray(t, w4)
-	if len(goals) != 1 {
-		t.Errorf("expected 1 goal, got %d", len(goals))
 	}
 }
 
@@ -664,7 +628,7 @@ func TestAPIGetLatestMessagesAllProjects(t *testing.T) {
 func TestAPIGetLatestTasks(t *testing.T) {
 	r := testRelay(t)
 	_, _, _ = r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil, "[]", 0)
-	_, _ = r.DB.DispatchTask("p1", "dev", "bot-a", "recent task", "", "P2", nil, nil, nil)
+	_, _ = r.DB.DispatchTask("p1", "dev", "bot-a", "recent task", "", "P2", nil, nil)
 
 	w := doAPI(r, "GET", "/tasks/latest?project=p1", "")
 	if w.Code != http.StatusOK {
@@ -675,7 +639,7 @@ func TestAPIGetLatestTasks(t *testing.T) {
 func TestAPIUpdateTask(t *testing.T) {
 	r := testRelay(t)
 	_, _, _ = r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil, "[]", 0)
-	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "old title", "", "P2", nil, nil, nil)
+	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "old title", "", "P2", nil, nil)
 
 	w := doAPI(r, "PUT", "/tasks/"+task.ID, `{"project":"p1","title":"new title"}`)
 	if w.Code != http.StatusOK {
@@ -690,7 +654,7 @@ func TestAPIUpdateTask(t *testing.T) {
 func TestAPIDeleteTask(t *testing.T) {
 	r := testRelay(t)
 	_, _, _ = r.DB.RegisterAgent("p1", "bot-a", "dev", "", nil, nil, false, nil, "[]", 0)
-	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "to delete", "", "P2", nil, nil, nil)
+	task, _ := r.DB.DispatchTask("p1", "dev", "bot-a", "to delete", "", "P2", nil, nil)
 
 	w := doAPI(r, "DELETE", "/tasks/"+task.ID+"?project=p1", "")
 	if w.Code != http.StatusOK {
@@ -699,34 +663,6 @@ func TestAPIDeleteTask(t *testing.T) {
 	data := decodeJSON(t, w)
 	if data["deleted"] != true {
 		t.Error("expected deleted=true")
-	}
-}
-
-// --- More Goal API Tests ---
-
-func TestAPIGetAllGoals(t *testing.T) {
-	r := testRelay(t)
-	_, _ = r.DB.CreateGoal("p1", "agent_goal", "Goal 1", "", "user", nil, nil)
-	_, _ = r.DB.CreateGoal("p2", "agent_goal", "Goal 2", "", "user", nil, nil)
-
-	w := doAPI(r, "GET", "/goals/all", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	goals := decodeJSONArray(t, w)
-	if len(goals) != 2 {
-		t.Errorf("expected 2 goals, got %d", len(goals))
-	}
-}
-
-func TestAPIGetGoalCascade(t *testing.T) {
-	r := testRelay(t)
-	parent, _ := r.DB.CreateGoal("p1", "mission", "Mission", "", "user", nil, nil)
-	_, _ = r.DB.CreateGoal("p1", "project_goal", "Sub-goal", "", "user", nil, &parent.ID)
-
-	w := doAPI(r, "GET", "/goals/cascade?project=p1", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
 
