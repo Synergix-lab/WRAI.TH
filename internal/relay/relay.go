@@ -24,6 +24,7 @@ type Relay struct {
 	Ingester  *ingest.Ingester
 	Events    *EventBus
 	Handlers  *Handlers
+	Notifier  *Notifier
 	Config    config.Config
 	// Version is the build tag, injected from main.Version.
 	// Defaults to "dev" when built without ldflags.
@@ -60,6 +61,11 @@ func New(database *db.DB, ingester *ingest.Ingester, cfg config.Config) *Relay {
 	for _, rt := range regTools {
 		serverTools = append(serverTools, rt.ServerTool)
 	}
+	// Initialize notifications subsystem (rules evaluator + digest scheduler).
+	// Seeds default rules on first run.
+	notifier := NewNotifier(database, registry, events)
+	handlers.SetNotifier(notifier)
+
 	serverTools = append(serverTools,
 		server.ServerTool{Tool: discoverToolsTool(), Handler: handlers.HandleDiscoverTools},
 		server.ServerTool{Tool: callToolTool(), Handler: handlers.HandleCallTool},
@@ -81,6 +87,7 @@ func New(database *db.DB, ingester *ingest.Ingester, cfg config.Config) *Relay {
 		Ingester:  ingester,
 		Events:    events,
 		Handlers:  handlers,
+		Notifier:  notifier,
 		Config:    cfg,
 		StartedAt: time.Now().UTC(),
 	}

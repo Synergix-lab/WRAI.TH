@@ -24,6 +24,13 @@ type Handlers struct {
 	ingester *ingest.Ingester
 	events   *EventBus
 	tokenCh  chan db.TokenRecord
+	notifier *Notifier
+}
+
+// SetNotifier connects the notifications subsystem so handlers can emit custom
+// events into the rules engine.
+func (h *Handlers) SetNotifier(n *Notifier) {
+	h.notifier = n
 }
 
 func NewHandlers(database *db.DB, registry *SessionRegistry, ingester *ingest.Ingester, events *EventBus) *Handlers {
@@ -1688,7 +1695,11 @@ func (h *Handlers) HandleBlockTask(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "block", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
-	emitTaskEvent(h.events, "task.blocked", "block", project, task)
+	blockedExtra := map[string]any{}
+	if reason != nil {
+		blockedExtra["reason"] = *reason
+	}
+	emitTaskEvent(h.events, "task.blocked", "block", project, task, blockedExtra)
 
 	// Notify dispatcher — blocked is critical
 	reasonStr := ""

@@ -239,10 +239,30 @@ main.mode-ops #messages-panel { display: none !important; }
 main.mode-ops #memories-panel { display: none !important; }
 main.mode-ops #tasks-panel { display: none !important; }
 
+main.mode-ops #notifications-panel { display: none !important; }
+
+main.mode-notifications #left-column { display: none !important; }
+main.mode-notifications #notifications-panel { flex: 1; display: flex !important; }
+main.mode-notifications #kanban-panel { display: none !important; }
+main.mode-notifications #vault-panel { display: none !important; }
+main.mode-notifications #ops-panel { display: none !important; }
+main.mode-notifications #messages-panel { display: none !important; }
+main.mode-notifications #memories-panel { display: none !important; }
+main.mode-notifications #tasks-panel { display: none !important; }
+main.mode-kanban #notifications-panel { display: none !important; }
+main.mode-vault #notifications-panel { display: none !important; }
+
 main.mode-canvas #vault-panel { display: none; }
 main.mode-canvas #ops-panel { display: none; }
+main.mode-canvas #notifications-panel { display: none; }
 main.mode-detail #vault-panel { display: none; }
 main.mode-detail #ops-panel { display: none; }
+main.mode-detail #notifications-panel { display: none; }
+
+#notifications-panel {
+  flex-direction: column;
+  overflow: hidden;
+}
 
 /* Agent focused: hide sidebar, full-width canvas+command panel */
 main.agent-focused #messages-panel,

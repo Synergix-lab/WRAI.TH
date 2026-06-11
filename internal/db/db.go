@@ -748,6 +748,40 @@ func migrate(conn *sql.DB) error {
 	)`)
 	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_cycles_project ON cycles(project)`)
 
+	// Notification rules: configurable event→action→target rules engine.
+	// match/opts are JSON blobs. Human-authored via the web UI (no MCP tools).
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS notification_rules (
+		id          TEXT PRIMARY KEY,
+		project     TEXT NOT NULL DEFAULT 'default',
+		name        TEXT NOT NULL,
+		enabled     INTEGER NOT NULL DEFAULT 1,
+		event       TEXT NOT NULL,
+		match_json  TEXT NOT NULL DEFAULT '{}',
+		action      TEXT NOT NULL,
+		target      TEXT NOT NULL DEFAULT '',
+		opts_json   TEXT NOT NULL DEFAULT '{}',
+		created_at  TEXT NOT NULL,
+		updated_at  TEXT NOT NULL
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_notification_rules_event ON notification_rules(project, event, enabled)`)
+
+	// Notification deliveries: capped delivery log for debugging launcher wiring.
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS notification_deliveries (
+		id          TEXT PRIMARY KEY,
+		project     TEXT NOT NULL DEFAULT 'default',
+		rule_id     TEXT NOT NULL,
+		rule_name   TEXT NOT NULL DEFAULT '',
+		event       TEXT NOT NULL,
+		action      TEXT NOT NULL DEFAULT '',
+		target      TEXT NOT NULL DEFAULT '',
+		outcome     TEXT NOT NULL DEFAULT '',
+		status_code INTEGER NOT NULL DEFAULT 0,
+		error       TEXT NOT NULL DEFAULT '',
+		payload     TEXT NOT NULL DEFAULT '',
+		created_at  TEXT NOT NULL
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_notification_deliveries_created ON notification_deliveries(created_at)`)
+
 	// Lowercase all agent names for case-insensitive matching
 	migrateLowercaseAgentNames(conn)
 
