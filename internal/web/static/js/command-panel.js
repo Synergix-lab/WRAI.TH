@@ -463,73 +463,6 @@ const CMD_STYLES = `
 .cmd-list-meta { color: #4a4e64; font-size: 9px; }
 .cmd-list-actions { display: flex; gap: 4px; }
 
-/* ── Skill entries (expandable .md cards) ── */
-.cmd-skill-entry {
-  border-bottom: 1px solid rgba(108, 92, 231, 0.08);
-  font-size: 10px;
-}
-.cmd-skill-entry:last-of-type { border-bottom: none; }
-.cmd-skill-header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 4px; cursor: pointer;
-  transition: background 0.15s;
-}
-.cmd-skill-header:hover { background: rgba(108, 92, 231, 0.06); }
-.cmd-skill-chevron {
-  color: #4a4e64; font-size: 7px; width: 10px; text-align: center;
-  flex-shrink: 0;
-}
-.cmd-skill-name {
-  font-weight: 600; color: #a29bfe;
-  font-family: 'JetBrains Mono', monospace;
-  flex-shrink: 0;
-}
-.cmd-skill-preview {
-  color: #4a4e64; font-size: 9px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  flex: 1; min-width: 0;
-}
-.cmd-skill-body {
-  padding: 0 4px 6px 20px;
-}
-.cmd-skill-md {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9px; line-height: 1.5;
-  color: #8a8ea0; white-space: pre-wrap; word-break: break-word;
-  margin: 0; padding: 6px 8px;
-  background: rgba(0,0,0,0.25);
-  border: 1px solid rgba(108, 92, 231, 0.1);
-  border-radius: 3px;
-  max-height: 200px; overflow-y: auto;
-}
-.cmd-skill-textarea {
-  min-height: 120px; font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
-  white-space: pre;
-}
-
-/* ── Quota bars ── */
-.cmd-quota-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-.cmd-quota-label {
-  font-size: 8px; color: #4a4e64;
-  min-width: 90px; letter-spacing: 1px;
-  text-transform: uppercase;
-}
-.cmd-quota-bar-bg {
-  flex: 1; height: 6px;
-  background: rgba(108, 92, 231, 0.06);
-  border-radius: 3px; overflow: hidden;
-}
-.cmd-quota-bar-fill {
-  height: 100%; border-radius: 3px;
-  transition: width 0.3s ease;
-  box-shadow: 0 0 4px currentColor;
-}
-.cmd-quota-value {
-  font-size: 9px; color: #7c6fe0;
-  min-width: 55px; text-align: right;
-}
-
 .cmd-inline-form {
   padding: 10px;
   background: rgba(10, 10, 26, 0.6);
@@ -791,13 +724,9 @@ export class CommandPanel {
     const stats = document.createElement('div');
     stats.className = 'cmd-stats';
     const lastSeen = a._lastSeenRaw ? timeAgo(a._lastSeenRaw) : '--';
-    const poolSize = a.pool_size || 1;
-    const skillCount = (a._skills || []).length;
     const taskCount = (a._tasks || []).length;
     stats.innerHTML = `
       <div class="cmd-stat"><span class="cmd-stat-value">${lastSeen}</span><span class="cmd-stat-label">Last seen</span></div>
-      <div class="cmd-stat"><span class="cmd-stat-value">${poolSize}</span><span class="cmd-stat-label">Pool size</span></div>
-      <div class="cmd-stat"><span class="cmd-stat-value">${skillCount}</span><span class="cmd-stat-label">Skills</span></div>
       <div class="cmd-stat"><span class="cmd-stat-value">${taskCount}</span><span class="cmd-stat-label">Tasks</span></div>
     `;
     left.appendChild(stats);
