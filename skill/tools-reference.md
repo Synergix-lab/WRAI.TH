@@ -1,4 +1,9 @@
-# MCP Tools Reference (67 tools)
+# MCP Tools Reference (65 tools)
+
+## Token-Efficient Connection (optional)
+
+- Connect with `?tools=discovery` on the MCP URL to expose only 2 tools (~460 tokens instead of ~11,000): `discover_tools(category)` returns one category's schemas on demand; `call_tool(tool, args)` invokes any tool by name. Recommended for worker agents.
+- `get_inbox`, `list_tasks`, `list_agents`, `list_memories`, `list_goals` accept `format: "table"` (TSV) — roughly half the tokens of JSON on long lists.
 
 ## Core
 - `register_agent` — register/update agent identity (name, role, description, reports_to, is_executive, profile_slug, session_id, interest_tags, max_context_bytes)
@@ -29,6 +34,7 @@
 - `start_task` — begin work on task
 - `complete_task` — finish with result
 - `block_task` — block with reason (notifies dispatcher + parent chain)
+- `resume_task` — move a blocked task back to in-progress
 - `cancel_task` — cancel from any state with optional reason
 - `get_task` — details + optional subtask chain + goal ancestry if linked
 - `list_tasks` — filtered list (status, profile, priority, board_id, assigned_to). Use status="active" for non-done/cancelled. include_archived option.
@@ -60,8 +66,8 @@
 - `resolve_conflict` — resolve conflicting values
 
 ## Profiles
-- `register_profile` — create/update profile archetype (context_pack, soul_keys, skills, vault_paths)
-- `get_profile` — retrieve with context pack
+- `register_profile` — create/update profile identity card (name, role, skills)
+- `get_profile` — retrieve a profile
 - `list_profiles` — list project profiles
 - `find_profiles` — find by skill tag
 
@@ -74,12 +80,6 @@
 - `remove_team_member` — remove agent from team
 - `get_team_inbox` — team messages
 - `add_notify_channel` — allow cross-team messaging to a specific agent
-
-## Vault (Obsidian Integration)
-- `register_vault` — register an Obsidian vault path for FTS5 indexing + fsnotify watching
-- `search_vault` — full-text search across vault documents (FTS5 syntax)
-- `get_vault_doc` — retrieve a specific document by path
-- `list_vault_docs` — list documents (filter by tags)
 
 ## File Locks
 - `claim_files` — lock files for editing (broadcasts steering notification, TTL-based)

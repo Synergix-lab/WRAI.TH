@@ -52,8 +52,8 @@ func sendMessageTool() mcp.Tool {
 		mcp.WithString("metadata", mcp.Description("JSON string of additional metadata")),
 		mcp.WithString("conversation_id", mcp.Description("Send to a conversation instead of a single agent")),
 		mcp.WithString("priority",
-			mcp.Description("P0=interrupt, P1=steering, P2=advisory (default), P3=info. Aliases accepted."),
-			mcp.Enum("P0", "P1", "P2", "P3", "interrupt", "steering", "advisory", "info"),
+			mcp.Description("P0=interrupt, P1=steering, P2=advisory (default), P3=info"),
+			mcp.Enum("P0", "P1", "P2", "P3"),
 		),
 		mcp.WithNumber("ttl_seconds", mcp.Description("Seconds before expiry (default 14400 = 4h, 0 = never). Expired messages leave the inbox.")),
 		mcp.WithString("target_project", mcp.Description("Cross-project DM: deliver to this agent name in target_project. Both sender and recipient must be is_executive. Message lives in the target project; metadata records the source.")),
@@ -582,6 +582,7 @@ func listGoalsTool() mcp.Tool {
 		),
 		mcp.WithString("owner_agent", mcp.Description("Filter by owner")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
+		mcp.WithString("format", mcp.Description("'json' (default) or 'table' (TSV, ~half the tokens)"), mcp.Enum("json", "table")),
 	)
 }
 

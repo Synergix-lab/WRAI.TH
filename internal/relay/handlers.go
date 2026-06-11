@@ -674,27 +674,43 @@ func (h *Handlers) HandleListAgents(ctx context.Context, req mcp.CallToolRequest
 		sessionByID[s.SessionID] = s
 	}
 
-	type agentWithActivity struct {
-		models.Agent
-		Activity     string `json:"activity,omitempty"`
-		ActivityTool string `json:"activity_tool,omitempty"`
+	// Curated list view: identity + liveness only. Full records (session_id,
+	// interest_tags, max_context_bytes, timestamps) stay on the REST API.
+	type agentEntry struct {
+		Name        string `json:"name"`
+		Role        string `json:"role,omitempty"`
+		Description string `json:"description,omitempty"`
+		Status      string `json:"status"`
+		IsExecutive bool   `json:"is_executive,omitempty"`
+		ReportsTo   string `json:"reports_to,omitempty"`
+		ProfileSlug string `json:"profile_slug,omitempty"`
+		LastSeen    string `json:"last_seen"`
+		Activity    string `json:"activity,omitempty"`
 	}
 
-	result := make([]agentWithActivity, 0, len(agents))
+	result := make([]agentEntry, 0, len(agents))
 	for _, a := range agents {
 		// Truncate description to keep the list payload bounded; full bio is on
 		// the agent's profile / get_profile.
 		if len(a.Description) > 200 {
 			a.Description = a.Description[:200] + "…"
 		}
-		aa := agentWithActivity{Agent: a}
+		entry := agentEntry{
+			Name:        a.Name,
+			Role:        a.Role,
+			Description: a.Description,
+			Status:      a.Status,
+			IsExecutive: a.IsExecutive,
+			ReportsTo:   strOrDash(a.ReportsTo),
+			ProfileSlug: strOrDash(a.ProfileSlug),
+			LastSeen:    a.LastSeen,
+		}
 		if a.SessionID != nil {
 			if s, ok := sessionByID[*a.SessionID]; ok {
-				aa.Activity = string(s.Activity)
-				aa.ActivityTool = s.Tool
+				entry.Activity = string(s.Activity)
 			}
 		}
-		result = append(result, aa)
+		result = append(result, entry)
 	}
 
 	if req.GetString("format", "json") == "table" {
@@ -2592,6 +2608,18 @@ func (h *Handlers) HandleListGoals(ctx context.Context, req mcp.CallToolRequest)
 			progress = float64(done) / float64(total)
 		}
 		enriched = append(enriched, goalWithProgress{Goal: g, TotalTasks: total, DoneTasks: done, Progress: progress})
+	}
+
+	if req.GetString("format", "json") == "table" {
+		rows := make([][]string, len(enriched))
+		for i, g := range enriched {
+			rows[i] = []string{
+				g.ID, g.Type, g.Status, strOrDash(g.OwnerAgent), g.Title,
+				fmt.Sprintf("%d/%d", g.DoneTasks, g.TotalTasks),
+			}
+		}
+		table := renderTable([]string{"id", "type", "status", "owner", "title", "progress"}, rows)
+		return h.resultTextTracked(project, "", "list_goals", fmt.Sprintf("%d goals\n%s", len(enriched), table))
 	}
 
 	return h.resultJSONTracked(project, "", "list_goals", map[string]any{

@@ -127,6 +127,8 @@ If the relay appears at multiple levels, Claude Code deduplicates by server name
 
 > **Tip:** Don't put `?project=` in the URL. Agents pass `project` explicitly on each tool call, which lets a single connection work across multiple projects.
 
+> **Token tip:** Add `?tools=discovery` to the URL for worker agents. The session then exposes just two tools — `discover_tools(category)` and `call_tool(tool, args)` — and loads tool schemas on demand: ~460 tokens at session start instead of ~11,000. List tools also accept `format: "table"` (TSV) for roughly half the tokens of JSON on long lists.
+
 </details>
 
 > **Team/server deployment?** See [docs/deployment.md](docs/deployment.md) -- API key auth, reverse proxy (Traefik/nginx/Caddy), TLS, platform notes.
