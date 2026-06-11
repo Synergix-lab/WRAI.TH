@@ -1777,10 +1777,12 @@ canvas.addEventListener("wheel", (e) => {
   engine.camera.zoomAt(sx, sy, e.deltaY, engine.width, engine.height);
 }, { passive: false });
 
-// Re-layout + re-fit on resize
-window.addEventListener("resize", () => {
+// Re-layout + re-fit whenever the stage is actually re-rasterized
+// (window resize or container box change via the engine's ResizeObserver).
+engine.onResize = () => {
   layoutAgents();
-});
+  updateHierarchyLinks();
+};
 
 // --- Helpers ---
 

@@ -892,7 +892,8 @@ export class CommandPanel {
       const dy = startY - e.clientY;
       const newH = Math.max(120, Math.min(window.innerHeight * 0.6, startH + dy));
       this._container.style.height = newH + 'px';
-      window.dispatchEvent(new Event('resize'));
+      // No resize dispatch: the dock floats over the canvas stage, so its
+      // height never reflows the scene.
     };
     const onUp = () => {
       if (!active) return;
