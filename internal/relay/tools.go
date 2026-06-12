@@ -21,7 +21,7 @@ func whoamiTool() mcp.Tool {
 func registerAgentTool() mcp.Tool {
 	return mcp.NewTool(
 		"register_agent",
-		mcp.WithDescription("Register an agent (once per agent at startup; re-registering updates it). Returns session_context: profile, tasks, unread messages, conversations.\n\nis_executive=true auto-creates the 'leadership' admin team and adds the agent, enabling broadcast (send_message to='*'). Broadcast is open until the first team exists, then requires admin-team membership."),
+		mcp.WithDescription("Register an agent with the relay. Call this once per agent at startup to announce their presence. Returns session_context with profile, tasks, unread messages, and conversations.\n\nRe-registering the same name+project is a respawn: role, description, interest_tags and max_context_bytes are updated, while identity fields you OMIT (reports_to, profile_slug, is_executive, session_id) are PRESERVED from the existing registration rather than cleared. This means a bare re-register won't drop a profile_slug set by your orchestrator. To clear these, use deactivate_agent / delete_agent / remove_team_member.\n\nIf is_executive=true (or already set), an 'admin' team ('leadership') is auto-created and the agent is added to it, enabling broadcast messages (send_message to='*')."),
 		projectParam,
 		mcp.WithString("name", mcp.Description("Unique agent name (e.g. 'backend'). Re-register same name to update. To rename: register new name, deactivate_agent the old."), mcp.Required()),
 		mcp.WithString("role", mcp.Description("Role description (e.g. 'FastAPI backend developer')")),
