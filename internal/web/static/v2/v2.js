@@ -9,8 +9,10 @@ import {
 import { initBoard } from './board.js';
 import { initStats } from './stats.js';
 import { initNotifications } from './notifications.js';
+import { initHome } from './home.js';
+import { initTeam } from './team.js';
+import { initLinearStrip } from './linear.js';
 
-const LS_KEY = 'wraith.v2.project';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -19,6 +21,8 @@ let projects = [];
 let selection = 'all';
 let settings = {};
 let disconnect = null;
+let streamFor = null;                 // selection the live stream is currently bound to
+let current = { view: 'home', project: null, page: 'home' };
 
 const eventSubs = new Set();
 const selSubs = new Set();
@@ -29,8 +33,12 @@ const ctx = {
   get selection() { return selection; },
   get projects() { return projects; },
   get settings() { return settings; },
+  get scope() { return current; },
+  currentPage: () => current.page,
   projNames: () => projects.map((p) => p.name),
   isMirror: (p) => !!(settings.linear && settings.linear.project && p === settings.linear.project),
+  // Linear team URL (workspace unknown — lands the logged-in user on Linear).
+  linearTeamURL: () => 'https://linear.app/',
   onEvent(fn) { eventSubs.add(fn); return () => eventSubs.delete(fn); },
   onSelection(fn) { selSubs.add(fn); return () => selSubs.delete(fn); },
   openSheet, closeSheet,
@@ -65,31 +73,32 @@ async function initHeader() {
     api.projects().catch(() => []),
     api.settings().catch(() => ({})),
   ]);
-  const saved = localStorage.getItem(LS_KEY);
-  const valid = saved === 'all' || projects.some((p) => p.name === saved);
-  selection = valid ? saved : 'all';
-
-  const sel = $('projectSelect');
-  sel.innerHTML = ['<option value="all">All projects</option>']
-    .concat(projects.map((p) =>
-      `<option value="${esc(p.name)}">${esc(p.name)} · ${(Number(p.total_tasks) || 0)}</option>`))
-    .join('');
-  sel.value = selection;
-  sel.addEventListener('change', () => {
-    selection = sel.value;
-    localStorage.setItem(LS_KEY, selection);
-    startStream();
-    selSubs.forEach((fn) => fn(selection));
-  });
 }
 
+// (Re)bind the live stream to the active scope. The stream is shared and only
+// re-opened when the scope's project actually changes (page-to-page nav inside a
+// project keeps the same socket).
 function startStream() {
+  if (streamFor === selection && disconnect) return;
   if (disconnect) { disconnect(); disconnect = null; }
+  streamFor = selection;
   setLive('connecting');
   disconnect = connectStream(selection, (evt) => {
     if (selection !== 'all' && evt.project && evt.project !== selection) return;
+    teamTabPulse(evt);
     eventSubs.forEach((fn) => { try { fn(evt); } catch (_) { /* page error isolated */ } });
   }, setLive);
+}
+
+// A message in this project while you're elsewhere → pulse the team tab.
+function teamTabPulse(evt) {
+  if (current.view !== 'project' || current.page === 'team') return;
+  if (!String(evt.type || '').startsWith('message')) return;
+  const tab = document.querySelector('.tab-team');
+  if (!tab) return;
+  tab.classList.remove('pulsing');
+  void tab.offsetWidth;            // restart the animation
+  tab.classList.add('has-traffic', 'pulsing');
 }
 function setLive(state) {
   $('liveStatus').dataset.state = state;
@@ -97,28 +106,108 @@ function setLive(state) {
 }
 
 /* ============================================================= *
- *  Router
+ *  Router — project is the container.
+ *    #/                       → project home (bento grid)
+ *    #/p/<name>/<page>        → inside a project (overview|board|stats|
+ *                               notifications|team)
+ *  Any hash is deep-link safe: a full reload re-mounts the same view.
  * ============================================================= */
-const ROUTES = {
+const PAGES = {
   overview: { init: () => overviewPage(ctx), instance: null },
   board: { init: (el) => initBoard(el, ctx), instance: null },
   stats: { init: (el) => initStats(el, ctx), instance: null },
   notifications: { init: (el) => initNotifications(el, ctx), instance: null },
+  team: { init: (el) => initTeam(el, ctx), instance: null },
 };
-function currentRoute() {
-  const r = (location.hash.replace(/^#\/?/, '') || 'overview');
-  return ROUTES[r] ? r : 'overview';
+let homeInstance = null;
+let linearStrip = null;
+
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, '');
+  if (h.startsWith('p/')) {
+    const rest = h.slice(2);
+    const i = rest.indexOf('/');
+    const project = decodeURIComponent(i === -1 ? rest : rest.slice(0, i));
+    const page = i === -1 ? 'overview' : rest.slice(i + 1).split('/')[0];
+    return { view: 'project', project, page: PAGES[page] ? page : 'overview' };
+  }
+  return { view: 'home', project: null, page: 'home' };
 }
+
+// Build the per-project tab hrefs for the entered project.
+function wireProjectTabs(project) {
+  document.querySelectorAll('#projTabs .tab').forEach((t) => {
+    t.href = `#/p/${encodeURIComponent(project)}/${t.dataset.route}`;
+  });
+}
+
+function showHomeChrome() {
+  document.body.dataset.scope = 'home';
+  $('projId').hidden = true;
+  $('projTabs').hidden = true;
+  $('linearStrip').hidden = true;
+  if (linearStrip) linearStrip.update(null);   // stop the connector pollers
+}
+
+function showProjectChrome(project) {
+  document.body.dataset.scope = 'project';
+  $('projId').hidden = false;
+  $('projTabs').hidden = false;
+  $('projIdName').textContent = project;
+  wireProjectTabs(project);
+  const mirror = ctx.isMirror(project);
+  const badge = $('projLinearBadge');
+  badge.hidden = !mirror;
+  if (mirror) {
+    $('projLinearTeam').textContent = (settings.linear && settings.linear.team_key) || 'linear';
+    badge.href = ctx.linearTeamURL();
+  }
+  // Linear connector strip — mirror project only.
+  if (!linearStrip) linearStrip = initLinearStrip($('linearStrip'), ctx);
+  linearStrip.update(project);
+}
+
 function route() {
-  const name = currentRoute();
-  document.querySelectorAll('.page').forEach((p) => { p.hidden = p.dataset.page !== name; });
-  document.querySelectorAll('.tab').forEach((t) => {
-    const on = t.dataset.route === name;
+  const next = parseHash();
+
+  // Unknown project in a deep link → fall back to home.
+  if (next.view === 'project' && projects.length && !projects.some((p) => p.name === next.project)) {
+    location.hash = '#/';
+    return;
+  }
+
+  const newSelection = next.view === 'project' ? next.project : 'all';
+  const selectionChanged = newSelection !== selection;
+  selection = newSelection;
+  current = next;
+
+  // (Re)bind stream + fan out selection changes to mounted pages.
+  startStream();
+  if (selectionChanged) selSubs.forEach((fn) => { try { fn(selection); } catch (_) { /* isolated */ } });
+
+  // Chrome.
+  if (next.view === 'home') showHomeChrome(); else showProjectChrome(next.project);
+
+  // Page visibility.
+  document.querySelectorAll('.page').forEach((p) => { p.hidden = p.dataset.page !== next.page; });
+  document.querySelectorAll('#projTabs .tab').forEach((t) => {
+    const on = t.dataset.route === next.page;
     t.classList.toggle('is-active', on);
     if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
   });
-  const entry = ROUTES[name];
-  const el = document.querySelector(`.page[data-page="${name}"]`);
+  if (next.page === 'team') {
+    const tab = document.querySelector('.tab-team');
+    if (tab) tab.classList.remove('has-traffic', 'pulsing');
+  }
+
+  // Mount + activate.
+  if (next.view === 'home') {
+    if (!homeInstance) homeInstance = initHome(document.querySelector('.page-home'), ctx) || {};
+    if (homeInstance.activate) homeInstance.activate();
+    return;
+  }
+  const entry = PAGES[next.page];
+  const el = document.querySelector(`.page[data-page="${next.page}"]`);
   if (!entry.instance) entry.instance = entry.init(el) || {};
   if (entry.instance.activate) entry.instance.activate();
 }
@@ -298,7 +387,7 @@ function overviewPage(ctx) {
   ctx.onSelection(() => { events = []; refresh(); });
 
   refresh();
-  setInterval(() => { if (document.visibilityState === 'visible' && currentRoute() === 'overview') refresh(); }, 60000);
+  setInterval(() => { if (document.visibilityState === 'visible' && current.page === 'overview') refresh(); }, 60000);
   return {};
 }
 
@@ -307,6 +396,5 @@ function overviewPage(ctx) {
  * ============================================================= */
 (async function boot() {
   await initHeader();
-  route();           // mounts the current page (overview by default)
-  startStream();
+  route();           // mounts the current view (home by default) + binds the stream
 })();

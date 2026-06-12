@@ -6,31 +6,62 @@
   <title>wrai.th · v2</title>
   <link rel="stylesheet" href="./v2.css" />
 </head>
-<body>
+<body data-scope="home">
   <div class="app">
     <!-- Header -->
     <header class="hdr">
       <div class="hdr-left">
-        <span class="wordmark">wrai<span class="dot">.</span>th</span>
+        <a class="wordmark-link" href="#/" aria-label="Project home">
+          <span class="wordmark">wrai<span class="dot">.</span>th</span>
+        </a>
         <span class="ver">v2</span>
-        <nav class="tabs" id="tabs" aria-label="Sections">
-          <a class="tab" href="#/overview" data-route="overview">overview</a>
-          <a class="tab" href="#/board" data-route="board">board</a>
-          <a class="tab" href="#/stats" data-route="stats">stats</a>
-          <a class="tab" href="#/notifications" data-route="notifications">notifications</a>
-        </nav>
+
+        <!-- project identity (project scope only) -->
+        <div class="proj-id" id="projId" hidden>
+          <a class="back-chip" href="#/" aria-label="Back to all projects">
+            <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            projects
+          </a>
+          <span class="proj-sep" aria-hidden="true">/</span>
+          <span class="proj-id-name" id="projIdName"></span>
+          <a class="linear-badge" id="projLinearBadge" hidden target="_blank" rel="noopener" title="Mirrored from Linear — open Linear">
+            <span class="lin-diamond" aria-hidden="true">◆</span><span class="lin-team" id="projLinearTeam"></span>
+            <span class="lin-arrow" aria-hidden="true">↗</span>
+          </a>
+        </div>
       </div>
       <div class="hdr-right">
         <span class="live" id="liveStatus" data-state="connecting">
           <span class="live-dot"></span><span class="live-label" id="liveLabel">connecting</span>
         </span>
-        <label class="proj">
-          <select id="projectSelect" aria-label="Project"></select>
-        </label>
       </div>
     </header>
 
+    <!-- per-project tabs (project scope only) -->
+    <nav class="proj-tabs" id="projTabs" hidden aria-label="Project sections">
+      <a class="tab" data-route="overview">overview</a>
+      <a class="tab" data-route="board">board</a>
+      <a class="tab" data-route="stats">stats</a>
+      <a class="tab" data-route="notifications">notifications</a>
+      <a class="tab tab-team" data-route="team">team<span class="tab-pulse" aria-hidden="true"></span></a>
+    </nav>
+
+    <!-- Linear connector strip (mirror project only) -->
+    <div class="linear-strip" id="linearStrip" hidden role="status" aria-label="Linear connector status"></div>
+
     <main class="view" id="view">
+      <!-- ============ PROJECT HOME ============ -->
+      <section class="page page-home" data-page="home">
+        <div class="home-hero">
+          <div class="home-hero-text">
+            <h1 class="home-title">control room</h1>
+            <p class="home-sub">each project is a place — enter one to watch its board, its agents, its conversations.</p>
+          </div>
+          <div class="home-agg" id="homeAgg" aria-label="All-projects summary"></div>
+        </div>
+        <div class="bento" id="bento" aria-label="Projects"></div>
+      </section>
+
       <!-- ============ OVERVIEW ============ -->
       <section class="page main" data-page="overview">
         <section class="kpis" id="kpis" aria-label="Key metrics">
@@ -97,6 +128,34 @@
           <div class="card-head"><span class="card-label">delivery log</span><span class="card-meta" id="deliveriesMeta"></span></div>
           <div class="deliveries-body" id="deliveriesBody"></div>
         </article>
+      </section>
+
+      <!-- ============ TEAM · MESSAGE CINEMA ============ -->
+      <section class="page page-team" data-page="team" hidden>
+        <div class="cinema">
+          <div class="stage" id="stage" aria-label="Agent constellation">
+            <svg class="stage-wires" id="stageWires" aria-hidden="true" preserveAspectRatio="none">
+              <defs>
+                <filter id="cometGlow" x="-60%" y="-60%" width="220%" height="220%">
+                  <feGaussianBlur stdDeviation="2.2" result="b" />
+                  <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+                </filter>
+              </defs>
+              <g class="stage-links" id="stageLinks"></g>
+              <g class="stage-pulses" id="stagePulses"></g>
+            </svg>
+            <div class="stage-nodes" id="stageNodes"></div>
+            <div class="stage-captions" id="stageCaptions" aria-hidden="true"></div>
+            <div class="stage-empty" id="stageEmpty" hidden></div>
+          </div>
+          <aside class="transcript" id="transcript" aria-label="Live transcript">
+            <div class="card-head">
+              <span class="card-label">transcript</span>
+              <span class="card-meta" id="transcriptMeta">live</span>
+            </div>
+            <div class="transcript-body" id="transcriptBody"></div>
+          </aside>
+        </div>
       </section>
     </main>
   </div>

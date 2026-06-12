@@ -32,6 +32,9 @@ export const api = {
     getJSON(`/api/tasks/board?${q({ project, cycle })}`),
   cycles: (project) => getJSON(`/api/cycles?${q({ project })}`),
   profiles: (project) => getJSON(`/api/profiles?${q({ project })}`),
+  agents: (project) => getJSON(`/api/agents?${q({ project })}`),
+  messagesLatest: (project, since) =>
+    getJSON(`/api/messages/latest?${q({ project, since })}`),
   progress: (id, project) =>
     getJSON(`/api/tasks/${encodeURIComponent(id)}/progress?${q({ project })}`),
   stats: (project, cycle) => getJSON(`/api/stats?${q({ project, cycle })}`),
@@ -159,6 +162,21 @@ export function fmtDur(sec) {
 
 export const prefersReducedMotion = () =>
   window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Parse a Go duration string ("1m0s", "90s", "1h30m") into milliseconds.
+export function parseGoDuration(s) {
+  if (typeof s === 'number') return s;
+  let ms = 0; const re = /([\d.]+)(h|m|s|ms)/g; let m;
+  while ((m = re.exec(String(s || '')))) {
+    const v = parseFloat(m[1]);
+    ms += v * ({ h: 3600e3, m: 60e3, s: 1e3, ms: 1 }[m[2]] || 0);
+  }
+  return ms;
+}
+
+// ISO timestamp `n` ms before now, in the microsecond format the API expects.
+export const isoSince = (ms) =>
+  new Date(Date.now() - ms).toISOString().replace('Z', '000Z');
 
 // Deterministic muted disc color from a name.
 const PALETTE = ['#4ade80', '#60a5fa', '#fbbf24', '#a78bfa', '#f87171', '#34d399', '#f472b6', '#38bdf8', '#fb923c', '#818cf8'];
