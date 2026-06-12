@@ -2636,12 +2636,19 @@ func (h *Handlers) buildSessionContext(project, agentName string, profileSlug *s
 	}
 	result["active_conversations"] = convs
 
-	// Relevant memories (agent-scope + project-scope)
-	memories, err := h.db.ListMemories(project, "", agentName, nil, 20)
+	// Relevant memories — cross-scope boot view (global + project + own
+	// agent-scope; plain ListMemories filters agent_name on all scopes and
+	// would hide other agents' shared memories), projected through Def. 7
+	// with constraints-layer bypass. Full values via get_memory(key).
+	memories, err := h.db.ListBootMemories(project, agentName, 50)
 	if err != nil || memories == nil {
 		memories = []models.Memory{}
 	}
-	result["relevant_memories"] = memories
+	projectedMems := projectMemories(memories, sessionMemoryBudget)
+	result["relevant_memories"] = projectedMems
+	if len(projectedMems) < len(memories) {
+		result["memories_omitted"] = len(memories) - len(projectedMems)
+	}
 
 	// Vault/doc context is served externally (ctx.prod.synergix.ch), not injected here.
 
@@ -2691,8 +2698,8 @@ func (h *Handlers) HandleQueryContext(ctx context.Context, req mcp.CallToolReque
 	memResults := make([]map[string]any, len(memories))
 	for i, m := range memories {
 		val := m.Value
-		if len(val) > 500 {
-			val = val[:500] + "..."
+		if v, truncated := truncatePreview(val, 500); truncated {
+			val = v + "..."
 		}
 		memResults[i] = map[string]any{
 			"type":       "memory",

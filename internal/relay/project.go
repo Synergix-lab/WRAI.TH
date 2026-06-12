@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"unicode/utf8"
+
 	"agent-relay/internal/models"
 )
 
@@ -26,6 +28,34 @@ const sessionUnreadBudget = 6000
 // preview in session_context. Mirrors the 300-char cap get_inbox already applies
 // (see handlers.go). Full bodies are fetched via get_inbox(full_content=true).
 const msgContentPreview = 300
+
+// memValuePreview bounds a single memory's value preview in session_context.
+// Full values are fetched via get_memory(key).
+const memValuePreview = 400
+
+// sessionMemoryBudget bounds the total bytes spent on relevant_memories in
+// session_context. Constraints-layer memories bypass the budget (Def. 3:
+// constraints > behavior > context — a constraint must never silently drop
+// out of boot).
+const sessionMemoryBudget = 6000
+
+// truncatePreview cuts s to at most max bytes without splitting a UTF-8 rune
+// (byte slicing on French text can cut an accent mid-sequence and produce
+// invalid JSON payloads). Returns the cut string and whether truncation occurred.
+func truncatePreview(s string, max int) (string, bool) {
+	if len(s) <= max {
+		return s, false
+	}
+	cut := s[:max]
+	for len(cut) > 0 && !utf8.RuneStart(cut[len(cut)-1]) {
+		cut = cut[:len(cut)-1]
+	}
+	// The last byte may be the start of a multi-byte rune whose tail was cut.
+	if r, _ := utf8.DecodeLastRuneInString(cut); r == utf8.RuneError {
+		cut = cut[:len(cut)-1]
+	}
+	return cut, true
+}
 
 // MessageSummary is the projected form of models.Message injected into
 // session_context.unread_messages. The Content field is truncated to
@@ -61,12 +91,7 @@ func summarizeMessage(m models.Message) MessageSummary {
 		ReplyTo:        m.ReplyTo,
 		DeliveryID:     m.DeliveryID,
 	}
-	if len(m.Content) > msgContentPreview {
-		s.ContentPreview = m.Content[:msgContentPreview]
-		s.ContentTruncated = true
-	} else {
-		s.ContentPreview = m.Content
-	}
+	s.ContentPreview, s.ContentTruncated = truncatePreview(m.Content, msgContentPreview)
 	return s
 }
 
@@ -182,12 +207,7 @@ func summarizeTask(t models.Task) TaskSummary {
 		DispatchedAt: t.DispatchedAt,
 	}
 	if t.Description != "" {
-		if len(t.Description) > taskDescPreview {
-			s.DescPreview = t.Description[:taskDescPreview]
-			s.DescTruncated = true
-		} else {
-			s.DescPreview = t.Description
-		}
+		s.DescPreview, s.DescTruncated = truncatePreview(t.Description, taskDescPreview)
 	}
 	return s
 }
@@ -240,6 +260,68 @@ func projectTasks(tasks []models.Task, maxBytes int) []TaskSummary {
 		b := taskSummaryBytes(s)
 		// P0 always bypasses the budget
 		if t.Priority == "P0" {
+			out = append(out, s)
+			used += b
+			continue
+		}
+		if maxBytes > 0 && used+b > maxBytes {
+			continue
+		}
+		out = append(out, s)
+		used += b
+	}
+	return out
+}
+// MemorySummary is the projected form of models.Memory injected into
+// session_context.relevant_memories. Value is truncated to memValuePreview;
+// the full value is reachable via get_memory(key).
+type MemorySummary struct {
+	Key            string `json:"key"`
+	ValuePreview   string `json:"value_preview"`
+	ValueTruncated bool   `json:"value_truncated,omitempty"`
+	Scope          string `json:"scope"`
+	Layer          string `json:"layer,omitempty"`
+	Confidence     string `json:"confidence,omitempty"`
+	AgentName      string `json:"agent_name,omitempty"`
+	UpdatedAt      string `json:"updated_at,omitempty"`
+}
+
+func summarizeMemory(m models.Memory) MemorySummary {
+	s := MemorySummary{
+		Key:        m.Key,
+		Scope:      m.Scope,
+		Layer:      m.Layer,
+		Confidence: m.Confidence,
+		AgentName:  m.AgentName,
+		UpdatedAt:  m.UpdatedAt,
+	}
+	s.ValuePreview, s.ValueTruncated = truncatePreview(m.Value, memValuePreview)
+	return s
+}
+
+func memorySummaryBytes(s MemorySummary) int {
+	n := len(s.Key) + len(s.ValuePreview) + len(s.Scope) + len(s.Layer) +
+		len(s.Confidence) + len(s.AgentName) + len(s.UpdatedAt)
+	// JSON structural overhead (quotes, commas, field names)
+	n += 140
+	return n
+}
+
+// projectMemories applies Def. 7 to boot memories: summarize each with a
+// bounded value preview, then greedily select until maxBytes is reached.
+// Constraints-layer memories bypass the budget (mirrors the P0-bypass rule):
+// a CTO constraint must always survive into the boot payload. The caller
+// (ListBootMemories) already orders constraints first, then updated_at DESC.
+func projectMemories(mems []models.Memory, maxBytes int) []MemorySummary {
+	if len(mems) == 0 {
+		return []MemorySummary{}
+	}
+	var out []MemorySummary
+	used := 0
+	for _, m := range mems {
+		s := summarizeMemory(m)
+		b := memorySummaryBytes(s)
+		if m.Layer == "constraints" {
 			out = append(out, s)
 			used += b
 			continue

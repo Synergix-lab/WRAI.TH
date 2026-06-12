@@ -29,7 +29,6 @@ var toolCategories = []struct{ name, summary string }{
 	{"profiles", "role archetypes: register, get, list, find by skill"},
 	{"agents", "agent lifecycle: list, deactivate, delete, sleep"},
 	{"teams", "teams + orgs: create, list, members, notify channels"},
-	{"locks", "file claims: claim_files, release_files, list_locks"},
 	{"projects", "project lifecycle: create_project, delete_project"},
 }
 
@@ -103,9 +102,12 @@ func (h *Handlers) toolRegistry() []registeredTool {
 		{server.ServerTool{Tool: removeTeamMemberTool(), Handler: h.HandleRemoveTeamMember}, "teams"},
 		{server.ServerTool{Tool: addNotifyChannelTool(), Handler: h.HandleAddNotifyChannel}, "teams"},
 
-		{server.ServerTool{Tool: claimFilesTool(), Handler: h.HandleClaimFiles}, "locks"},
-		{server.ServerTool{Tool: releaseFilesTool(), Handler: h.HandleReleaseFiles}, "locks"},
-		{server.ServerTool{Tool: listLocksTool(), Handler: h.HandleListLocks}, "locks"},
+		// File locks disabled: worktree isolation + merge conflicts replace
+		// advisory locks. Re-enable by uncommenting if a workflow ever needs
+		// cross-worktree file claims.
+		// {server.ServerTool{Tool: claimFilesTool(), Handler: h.HandleClaimFiles}, "locks"},
+		// {server.ServerTool{Tool: releaseFilesTool(), Handler: h.HandleReleaseFiles}, "locks"},
+		// {server.ServerTool{Tool: listLocksTool(), Handler: h.HandleListLocks}, "locks"},
 
 		{server.ServerTool{Tool: createProjectTool(), Handler: h.HandleCreateProject}, "projects"},
 		{server.ServerTool{Tool: deleteProjectTool(), Handler: h.HandleDeleteProject}, "projects"},

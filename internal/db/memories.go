@@ -376,6 +376,26 @@ func (d *DB) ListMemories(project, scope, agentName string, tags []string, limit
 	return d.queryMemories(q, args...)
 }
 
+// ListBootMemories returns the memories an agent should see at boot:
+// global + project-scope + its own agent-scope memories, mirroring
+// SearchMemory's cross-scope visibility clause. ListMemories with agentName
+// set filters agent_name on ALL scopes, which hides project/global memories
+// written by other agents — wrong for session_context (Def. 7 boot view).
+// Constraints-layer memories sort first so budget projection keeps them.
+func (d *DB) ListBootMemories(project, agentName string, limit int) ([]models.Memory, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	q := `SELECT id, key, value, tags, scope, project, agent_name, confidence, version,
+	 supersedes, conflict_with, created_at, updated_at, archived_at, archived_by, layer
+	 FROM memories
+	 WHERE archived_at IS NULL
+	   AND (scope = 'global' OR (project = ? AND (scope = 'project' OR (scope = 'agent' AND agent_name = ?))))
+	 ORDER BY CASE WHEN layer = 'constraints' THEN 0 ELSE 1 END, updated_at DESC
+	 LIMIT ?`
+	return d.queryMemories(q, project, agentName, limit)
+}
+
 // DeleteMemory soft-deletes a memory (sets archived_at).
 func (d *DB) DeleteMemory(project, agentName, key, scope string) error {
 	now := time.Now().UTC().Format(memoryTimeFmt)

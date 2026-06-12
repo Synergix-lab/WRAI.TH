@@ -3,6 +3,7 @@ package relay
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"agent-relay/internal/models"
 )
@@ -157,5 +158,84 @@ func TestProjectMessages_P0BypassesBudget(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("P0 message must bypass the budget")
+	}
+}
+
+func TestTruncatePreview_RuneSafe(t *testing.T) {
+	// "é" is 2 bytes in UTF-8; a 5-byte cap on "aaaaé" (6 bytes) must not
+	// keep the first byte of the é sequence.
+	s, truncated := truncatePreview("aaaaé", 5)
+	if !truncated {
+		t.Fatal("expected truncation")
+	}
+	if s != "aaaa" {
+		t.Fatalf("got %q, want %q", s, "aaaa")
+	}
+	// Exact fit: no truncation.
+	s, truncated = truncatePreview("aaaaé", 6)
+	if truncated || s != "aaaaé" {
+		t.Fatalf("got %q truncated=%v", s, truncated)
+	}
+	// French text heavy in accents stays valid UTF-8 at any cap.
+	src := strings.Repeat("salaire médiane AFC très élevée ", 20)
+	for max := 1; max < 64; max++ {
+		cut, _ := truncatePreview(src, max)
+		if !utf8.ValidString(cut) {
+			t.Fatalf("invalid UTF-8 at max=%d: %q", max, cut)
+		}
+		if len(cut) > max {
+			t.Fatalf("cut longer than max at max=%d", max)
+		}
+	}
+}
+
+func TestProjectMemories_ConstraintsBypassBudget(t *testing.T) {
+	var mems []models.Memory
+	// One constraints memory listed LAST with a huge value, after enough
+	// behavior memories to blow the budget.
+	for i := 0; i < 30; i++ {
+		mems = append(mems, models.Memory{
+			Key: "behavior-" + strings.Repeat("k", 10), Value: strings.Repeat("v", 400),
+			Scope: "project", Layer: "behavior",
+		})
+	}
+	mems = append(mems, models.Memory{
+		Key: "cto-rule", Value: strings.Repeat("c", 2000),
+		Scope: "project", Layer: "constraints",
+	})
+
+	out := projectMemories(mems, sessionMemoryBudget)
+
+	found := false
+	for _, s := range out {
+		if s.Key == "cto-rule" {
+			found = true
+			if !s.ValueTruncated || len(s.ValuePreview) != memValuePreview {
+				t.Fatalf("constraint value preview: len=%d truncated=%v", len(s.ValuePreview), s.ValueTruncated)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("constraints-layer memory dropped by budget — must bypass")
+	}
+	if len(out) >= len(mems) {
+		t.Fatal("expected budget to drop some behavior memories")
+	}
+}
+
+func TestProjectMemories_BudgetBound(t *testing.T) {
+	var mems []models.Memory
+	for i := 0; i < 50; i++ {
+		mems = append(mems, models.Memory{
+			Key: "k", Value: strings.Repeat("v", 400), Scope: "project", Layer: "behavior",
+		})
+	}
+	out := projectMemories(mems, sessionMemoryBudget)
+	used := 0
+	for _, s := range out {
+		used += memorySummaryBytes(s)
+	}
+	if used > sessionMemoryBudget {
+		t.Fatalf("budget exceeded: %d > %d", used, sessionMemoryBudget)
 	}
 }
