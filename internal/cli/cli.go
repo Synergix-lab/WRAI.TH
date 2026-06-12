@@ -38,12 +38,6 @@ func Run(args []string) {
 		runConversations(rest)
 	case "memories":
 		runMemories(rest)
-	case "children":
-		runChildren(rest)
-	case "schedules":
-		runSchedules(rest)
-	case "history":
-		runHistory(rest)
 	case "update":
 		runUpdate(rest)
 	default:
@@ -54,18 +48,29 @@ func Run(args []string) {
 }
 
 // parseProject extracts -p <value> from args. Returns (project, remaining args).
+// Defaults to "default" if no -p flag is present.
 func parseProject(args []string) (string, []string) {
+	project, _, rest := parseProjectExplicit(args)
+	return project, rest
+}
+
+// parseProjectExplicit is like parseProject but also returns whether the user
+// explicitly passed -p/--project. Callers can use this to display a hint about
+// the implicit default (e.g. CLI stats labelling which scope it shows).
+func parseProjectExplicit(args []string) (string, bool, []string) {
 	project := "default"
+	explicit := false
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		if (args[i] == "-p" || args[i] == "--project") && i+1 < len(args) {
 			project = args[i+1]
+			explicit = true
 			i++ // skip value
 		} else {
 			rest = append(rest, args[i])
 		}
 	}
-	return project, rest
+	return project, explicit, rest
 }
 
 // openDB opens the database in read-only mode, printing a user-friendly
@@ -116,10 +121,6 @@ commands:
     -s <query>                 search memories (FTS5)
     -a <agent>                 filter by agent
     -t <tag>                   filter by tag
-  children [-p project] [agent]  list spawned child agents
-    -s <status>                filter: running, finished, killed, all
-  schedules [-p project] [agent] list cron schedules
-  history [-p project] [agent]   show cycle execution history
 
 flags:
   -p, --project <name>   filter by project (default: "default")

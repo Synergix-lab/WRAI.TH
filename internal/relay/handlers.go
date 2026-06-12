@@ -9,40 +9,51 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"agent-relay/internal/connector"
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/models"
-	"agent-relay/internal/spawn"
-	"agent-relay/internal/vault"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 type Handlers struct {
-	db           *db.DB
-	registry     *SessionRegistry
-	ingester     *ingest.Ingester
-	vaultWatcher *vault.Watcher
-	events       *EventBus
-	tokenCh      chan db.TokenRecord
-	spawnMgr     *spawn.Manager
-	wfEngine     WorkflowFirer
+	db        *db.DB
+	registry  *SessionRegistry
+	ingester  *ingest.Ingester
+	events    *EventBus
+	tokenCh   chan db.TokenRecord
+	notifier  *Notifier
+	connMu    sync.RWMutex
+	connector connector.TaskConnector
 }
 
-// WorkflowFirer is the interface the dispatcher uses to fire workflows.
-type WorkflowFirer interface {
-	FireWorkflows(project, event string, meta map[string]string)
+// SetNotifier connects the notifications subsystem so handlers can emit custom
+// events into the rules engine.
+func (h *Handlers) SetNotifier(n *Notifier) {
+	h.notifier = n
 }
 
-// SetWorkflowEngine connects the workflow engine for event-driven execution.
-func (h *Handlers) SetWorkflowEngine(engine WorkflowFirer) {
-	h.wfEngine = engine
+// SetConnector wires the task connector so the review handler can fire the one
+// owned write-back (→ In Review + comment) when running in Linear mode.
+func (h *Handlers) SetConnector(c connector.TaskConnector) {
+	h.connMu.Lock()
+	h.connector = c
+	h.connMu.Unlock()
 }
 
-func NewHandlers(database *db.DB, registry *SessionRegistry, ingester *ingest.Ingester, vaultWatcher *vault.Watcher, events *EventBus) *Handlers {
-	h := &Handlers{db: database, registry: registry, ingester: ingester, vaultWatcher: vaultWatcher, events: events, tokenCh: make(chan db.TokenRecord, 256)}
+// getConnector returns the current task connector (hot-swappable at runtime).
+func (h *Handlers) getConnector() connector.TaskConnector {
+	h.connMu.RLock()
+	defer h.connMu.RUnlock()
+	return h.connector
+}
+
+func NewHandlers(database *db.DB, registry *SessionRegistry, ingester *ingest.Ingester, events *EventBus) *Handlers {
+	h := &Handlers{db: database, registry: registry, ingester: ingester, events: events, tokenCh: make(chan db.TokenRecord, 256)}
 	go h.flushTokenUsage()
 	return h
 }
@@ -99,6 +110,58 @@ func (h *Handlers) resultJSONTracked(project, agent, tool string, data any) (*mc
 	default:
 	}
 	return mcp.NewToolResultText(string(b)), nil
+}
+
+// resultTextTracked records token usage for a plain-text result (table format).
+func (h *Handlers) resultTextTracked(project, agent, tool, text string) (*mcp.CallToolResult, error) {
+	select {
+	case h.tokenCh <- db.TokenRecord{
+		Project:   project,
+		Agent:     agent,
+		Tool:      tool,
+		Bytes:     len(text),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}:
+	default:
+	}
+	return mcp.NewToolResultText(text), nil
+}
+
+// renderTable renders rows as a compact (unpadded) markdown table. Keys are
+// paid once in the header instead of once per element — roughly half the
+// tokens of the equivalent JSON for homogeneous lists, and markdown reads
+// more reliably for LLMs than raw separators.
+func renderTable(header []string, rows [][]string) string {
+	var sb strings.Builder
+	sb.WriteByte('|')
+	for _, col := range header {
+		sb.WriteString(col)
+		sb.WriteByte('|')
+	}
+	sb.WriteString("\n|")
+	for range header {
+		sb.WriteString("---|")
+	}
+	cleaner := strings.NewReplacer("|", "\\|", "\t", "  ", "\n", " ", "\r", "")
+	for _, row := range rows {
+		sb.WriteString("\n|")
+		for _, cell := range row {
+			cell = cleaner.Replace(cell)
+			if cell == "" {
+				cell = "-"
+			}
+			sb.WriteString(cell)
+			sb.WriteByte('|')
+		}
+	}
+	return sb.String()
+}
+
+func strOrDash(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // HandleWhoami finds the caller's Claude Code session by grepping transcripts for a unique salt.
@@ -261,10 +324,24 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 	conversationID := optionalString(req.GetString("conversation_id", ""))
 	priority := mapPriority(req.GetString("priority", "P2"))
 	ttlSeconds := req.GetInt("ttl_seconds", 14400)
+	targetProject := strings.TrimSpace(req.GetString("target_project", ""))
 
 	// Quota check: messages
 	if qErr := h.db.CheckQuotaError(project, from, "messages"); qErr != "" {
 		return mcp.NewToolResultError(qErr), nil
+	}
+
+	// Cross-project DM: delivered to a peer executive in a different project.
+	// MVP scope: direct messages only (no broadcast, no team, no conversation).
+	// Both sender and recipient must be registered with is_executive=true.
+	if targetProject != "" && targetProject != project {
+		if to == "" {
+			return mcp.NewToolResultError("target_project requires a 'to' agent name"), nil
+		}
+		if to == "*" || strings.HasPrefix(to, "team:") || conversationID != nil {
+			return mcp.NewToolResultError("cross-project messaging is limited to direct DMs (no broadcast, no team:, no conversation_id)"), nil
+		}
+		return h.sendCrossProject(ctx, project, from, targetProject, to, msgType, subject, content, metadata, replyTo, priority, ttlSeconds)
 	}
 
 	// Support "to": "conversation:<id>" shorthand
@@ -363,16 +440,84 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		h.registry.Notify(project, to, from, subject, msg.ID)
 	}
 
-	// Fire triggers for high-priority messages (P0/P1)
-	if priority == "P0" || priority == "P1" {
-		msgMeta := map[string]string{"priority": priority, "from": from, "to": to, "subject": subject, "message_id": msg.ID}
-		go h.fireTriggers(project, "message_received", msgMeta)
-		if priority == "P0" {
-			go h.fireTriggers(project, "signal:interrupt", msgMeta)
-		}
+	// Emit visual event for activity feed / SSE subscribers. Action distinguishes
+	// broadcast / team / conversation / direct so the UI can render icons.
+	action := "send"
+	switch {
+	case to == "*":
+		action = "broadcast"
+	case strings.HasPrefix(to, "team:"):
+		action = "team"
+	case conversationID != nil:
+		action = "conversation"
 	}
+	h.events.Emit(MCPEvent{Type: "message", Action: action, Agent: from, Project: project, Target: to, Label: subject})
 
 	return h.resultJSONTracked(project, from, "send_message", msg)
+}
+
+// sendCrossProject delivers a direct message to an agent in a different project.
+// Both sender and recipient must be is_executive=true — this is the MVP guardrail
+// for peer-to-peer cross-project DM (e.g. two CTOs coordinating between colonies).
+// The message is inserted with project=targetProject (destination scope) so it
+// appears in the recipient's inbox naturally. metadata.source_project and
+// metadata.source_agent preserve the origin for UI rendering and reply routing.
+func (h *Handlers) sendCrossProject(ctx context.Context, srcProject, from, dstProject, to, msgType, subject, content, callerMetadata string, replyTo *string, priority string, ttlSeconds int) (*mcp.CallToolResult, error) {
+	// Validate sender exists and is executive
+	sender, err := h.db.GetAgent(srcProject, from)
+	if err != nil || sender == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("sender '%s' not found in project '%s'", from, srcProject)), nil
+	}
+	if !sender.IsExecutive {
+		return mcp.NewToolResultError("cross-project messaging requires sender to be is_executive=true"), nil
+	}
+
+	// Validate target exists and is executive
+	target, err := h.db.GetAgent(dstProject, to)
+	if err != nil || target == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("target '%s' not found in project '%s'", to, dstProject)), nil
+	}
+	if !target.IsExecutive {
+		return mcp.NewToolResultError(fmt.Sprintf("cross-project messaging requires target '%s' in project '%s' to be is_executive=true", to, dstProject)), nil
+	}
+
+	// Merge caller-provided metadata with source tracking fields
+	meta := map[string]any{}
+	if callerMetadata != "" && callerMetadata != "{}" {
+		_ = json.Unmarshal([]byte(callerMetadata), &meta)
+	}
+	meta["source_project"] = srcProject
+	meta["source_agent"] = from
+	meta["cross_project"] = true
+	metaBytes, _ := json.Marshal(meta)
+
+	// Insert the message in the DESTINATION project scope — this is what makes
+	// it visible in the recipient's get_inbox(project=dstProject) without any
+	// special routing in the read path.
+	msg, err := h.db.InsertMessage(dstProject, from, to, msgType, subject, content, string(metaBytes), priority, ttlSeconds, replyTo, nil)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to insert cross-project message: %v", err)), nil
+	}
+	// Delivery for the single recipient in the destination project
+	if err := h.db.CreateDeliveries(msg.ID, dstProject, []string{to}); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("delivery failed: %v", err)), nil
+	}
+
+	// Push notification if the target has an open session
+	h.registry.Notify(dstProject, to, from, subject, msg.ID)
+
+	// Visible event — scoped to SENDER project so the sender sees it in their
+	// activity feed; target's inbox naturally surfaces the message.
+	h.events.Emit(MCPEvent{
+		Type:    "message",
+		Action:  "cross_project",
+		Agent:   from,
+		Project: srcProject,
+		Target:  fmt.Sprintf("%s@%s", to, dstProject),
+		Label:   subject,
+	})
+
+	return h.resultJSONTracked(srcProject, from, "send_message", msg)
 }
 
 func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -396,7 +541,18 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 		ExcludeBroadcasts: req.GetBool("exclude_broadcasts", false),
 	}
 
-	messages, err := h.db.GetInbox(project, agent, unreadOnly, limit, filter)
+	// Budget mode needs a 2-step flow: fetch without surfacing, prune, then surface
+	// only the survivors. Otherwise messages dropped by the budget filter would be
+	// marked 'surfaced' and invisible on the next poll.
+	var (
+		messages []models.Message
+		err      error
+	)
+	if budgetMode && h.db.HasDeliveries() {
+		messages, err = h.db.FetchInboxDeliveries(project, agent, unreadOnly, limit, filter)
+	} else {
+		messages, err = h.db.GetInbox(project, agent, unreadOnly, limit, filter)
+	}
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get inbox: %v", err)), nil
 	}
@@ -412,6 +568,14 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 			_ = json.Unmarshal([]byte(agentObj.InterestTags), &tags)
 			messages = applyBudget(messages, tags, agentObj.MaxContextBytes)
 		}
+		// Surface only the deliveries that survived the budget filter
+		var surviving []string
+		for _, m := range messages {
+			if m.DeliveryID != nil && m.DeliveryState != nil && *m.DeliveryState == "queued" {
+				surviving = append(surviving, *m.DeliveryID)
+			}
+		}
+		h.db.MarkDeliveriesSurfaced(surviving)
 	}
 
 	formatted := make([]map[string]any, len(messages))
@@ -442,7 +606,43 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 		if m.DeliveryState != nil {
 			entry["delivery_state"] = *m.DeliveryState
 		}
+		// Surface cross-project origin when present so the caller (and UI)
+		// can render "from X@colony-b" instead of a bare sender name.
+		if m.Metadata != "" && m.Metadata != "{}" {
+			var meta map[string]any
+			if err := json.Unmarshal([]byte(m.Metadata), &meta); err == nil {
+				if sp, ok := meta["source_project"].(string); ok && sp != "" {
+					entry["source_project"] = sp
+				}
+				if sa, ok := meta["source_agent"].(string); ok && sa != "" {
+					entry["source_agent"] = sa
+				}
+				if cp, ok := meta["cross_project"].(bool); ok && cp {
+					entry["cross_project"] = true
+				}
+			}
+		}
 		formatted[i] = entry
+	}
+
+	if f := req.GetString("format", "md"); f == "md" || f == "table" {
+		rows := make([][]string, len(messages))
+		for i, m := range messages {
+			content, _ := formatted[i]["content"].(string)
+			// Threading context: conversation membership or reply chain.
+			thread := ""
+			if m.ConversationID != nil {
+				thread = "conv:" + *m.ConversationID
+			} else if m.ReplyTo != nil {
+				thread = "re:" + *m.ReplyTo
+			}
+			rows[i] = []string{
+				m.ID, strOrDash(m.DeliveryID), m.From, m.To, m.Type,
+				m.Priority, thread, m.CreatedAt, m.Subject, content,
+			}
+		}
+		table := renderTable([]string{"id", "delivery_id", "from", "to", "type", "priority", "thread", "created_at", "subject", "content"}, rows)
+		return h.resultTextTracked(project, agent, "get_inbox", fmt.Sprintf("%d messages for %s\n%s", len(messages), agent, table))
 	}
 
 	return h.resultJSONTracked(project, agent, "get_inbox", map[string]any{
@@ -455,7 +655,17 @@ func (h *Handlers) HandleGetInbox(ctx context.Context, req mcp.CallToolRequest) 
 func (h *Handlers) HandleAckDelivery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	deliveryID := req.GetString("delivery_id", "")
 	if deliveryID == "" {
-		return mcp.NewToolResultError("delivery_id is required"), nil
+		// Common mistake: callers pass message_id. Offer a fallback if the
+		// caller also passed as+project so we can resolve message_id → delivery_id.
+		if msgID := req.GetString("message_id", ""); msgID != "" {
+			agent := resolveAgent(ctx, req)
+			project := resolveProject(ctx, req)
+			if err := h.db.AcknowledgeDeliveryByMessage(msgID, agent, project); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to acknowledge delivery by message: %v", err)), nil
+			}
+			return h.resultJSONTracked(project, agent, "ack_delivery", map[string]any{"acknowledged_message_id": msgID})
+		}
+		return mcp.NewToolResultError("delivery_id is required (get it from get_inbox response — each message has a delivery_id field). If you only have the message_id, pass message_id + as + project instead."), nil
 	}
 	if err := h.db.AcknowledgeDelivery(deliveryID); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to acknowledge delivery: %v", err)), nil
@@ -473,13 +683,34 @@ func (h *Handlers) HandleGetThread(ctx context.Context, req mcp.CallToolRequest)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get thread: %v", err)), nil
 	}
-	if messages == nil {
-		messages = []models.Message{}
+
+	formatted := make([]map[string]any, len(messages))
+	for i, m := range messages {
+		entry := map[string]any{
+			"id":         m.ID,
+			"from":       m.From,
+			"to":         m.To,
+			"type":       m.Type,
+			"subject":    m.Subject,
+			"content":    m.Content,
+			"created_at": m.CreatedAt,
+			"priority":   m.Priority,
+		}
+		if m.ReplyTo != nil {
+			entry["reply_to"] = *m.ReplyTo
+		}
+		if m.ConversationID != nil {
+			entry["conversation_id"] = *m.ConversationID
+		}
+		if m.Metadata != "" && m.Metadata != "{}" {
+			entry["metadata"] = m.Metadata
+		}
+		formatted[i] = entry
 	}
 
 	return h.resultJSONTracked(resolveProject(ctx, req), "", "get_thread", map[string]any{
-		"count":    len(messages),
-		"messages": messages,
+		"count":    len(formatted),
+		"messages": formatted,
 	})
 }
 
@@ -504,22 +735,56 @@ func (h *Handlers) HandleListAgents(ctx context.Context, req mcp.CallToolRequest
 		sessionByID[s.SessionID] = s
 	}
 
-	type agentWithActivity struct {
-		models.Agent
-		Activity     string `json:"activity,omitempty"`
-		ActivityTool string `json:"activity_tool,omitempty"`
+	// Curated list view: identity + liveness only. Full records (session_id,
+	// interest_tags, max_context_bytes, timestamps) stay on the REST API.
+	type agentEntry struct {
+		Name        string `json:"name"`
+		Role        string `json:"role,omitempty"`
+		Description string `json:"description,omitempty"`
+		Status      string `json:"status"`
+		IsExecutive bool   `json:"is_executive,omitempty"`
+		ReportsTo   string `json:"reports_to,omitempty"`
+		ProfileSlug string `json:"profile_slug,omitempty"`
+		LastSeen    string `json:"last_seen"`
+		Activity    string `json:"activity,omitempty"`
 	}
 
-	result := make([]agentWithActivity, 0, len(agents))
+	result := make([]agentEntry, 0, len(agents))
 	for _, a := range agents {
-		aa := agentWithActivity{Agent: a}
+		// Truncate description to keep the list payload bounded; full bio is on
+		// the agent's profile / get_profile.
+		if len(a.Description) > 200 {
+			a.Description = a.Description[:200] + "…"
+		}
+		entry := agentEntry{
+			Name:        a.Name,
+			Role:        a.Role,
+			Description: a.Description,
+			Status:      a.Status,
+			IsExecutive: a.IsExecutive,
+			ReportsTo:   strOrDash(a.ReportsTo),
+			ProfileSlug: strOrDash(a.ProfileSlug),
+			LastSeen:    a.LastSeen,
+		}
 		if a.SessionID != nil {
 			if s, ok := sessionByID[*a.SessionID]; ok {
-				aa.Activity = string(s.Activity)
-				aa.ActivityTool = s.Tool
+				entry.Activity = string(s.Activity)
 			}
 		}
-		result = append(result, aa)
+		result = append(result, entry)
+	}
+
+	if f := req.GetString("format", "md"); f == "md" || f == "table" {
+		rows := make([][]string, len(result))
+		for i, a := range result {
+			exec := ""
+			if a.IsExecutive {
+				exec = "yes"
+			}
+			rows[i] = []string{a.Name, a.Role, a.Status, exec, a.LastSeen, a.Activity, a.Description}
+		}
+		table := renderTable([]string{"name", "role", "status", "executive", "last_seen", "activity", "description"}, rows)
+		return h.resultTextTracked(project, "", "list_agents", fmt.Sprintf("%d agents\n%s", len(result), table))
 	}
 
 	return h.resultJSONTracked(project, "", "list_agents", map[string]any{
@@ -545,8 +810,14 @@ func (h *Handlers) HandleMarkRead(ctx context.Context, req mcp.CallToolRequest) 
 	}
 
 	ids := req.GetStringSlice("message_ids", nil)
+	// Common mistake: singular message_id. Accept it as a one-element array.
 	if len(ids) == 0 {
-		return mcp.NewToolResultError("message_ids or conversation_id is required"), nil
+		if single := req.GetString("message_id", ""); single != "" {
+			ids = []string{single}
+		}
+	}
+	if len(ids) == 0 {
+		return mcp.NewToolResultError("message_ids (array) or conversation_id is required. Note: the field is plural — pass message_ids:['id1','id2'] not message_id."), nil
 	}
 
 	count, err := h.db.MarkRead(ids, agent, project)
@@ -671,7 +942,9 @@ func (h *Handlers) HandleGetConversationMessages(ctx context.Context, req mcp.Ca
 			entry["content"] = c
 		default: // "full"
 			entry["content"] = m.Content
-			entry["metadata"] = m.Metadata
+			if m.Metadata != "" && m.Metadata != "{}" {
+				entry["metadata"] = m.Metadata
+			}
 		}
 		formatted[i] = entry
 	}
@@ -1053,6 +1326,16 @@ func (h *Handlers) HandleListMemories(ctx context.Context, req mcp.CallToolReque
 		}
 	}
 
+	if f := req.GetString("format", "md"); f == "md" || f == "table" {
+		rows := make([][]string, len(memories))
+		for i, m := range memories {
+			val, _ := truncated[i]["value"].(string)
+			rows[i] = []string{m.Key, m.Scope, m.AgentName, m.Confidence, m.Tags, val, m.UpdatedAt}
+		}
+		table := renderTable([]string{"key", "scope", "agent", "confidence", "tags", "value", "updated_at"}, rows)
+		return h.resultTextTracked(project, "", "list_memories", fmt.Sprintf("%d memories\n%s", len(memories), table))
+	}
+
 	return h.resultJSONTracked(project, "", "list_memories", map[string]any{
 		"count":    len(truncated),
 		"memories": truncated,
@@ -1117,22 +1400,9 @@ func (h *Handlers) HandleRegisterProfile(ctx context.Context, req mcp.CallToolRe
 		return mcp.NewToolResultError("name is required"), nil
 	}
 	role := req.GetString("role", "")
-	contextPack := req.GetString("context_pack", "")
-	soulKeys := normalizeJSONArrayParam(req, "soul_keys")
 	skills := normalizeJSONArrayParam(req, "skills")
-	vaultPaths := normalizeJSONArrayParam(req, "vault_paths")
-	allowedTools := normalizeJSONArrayParam(req, "allowed_tools")
-	poolSize := req.GetInt("pool_size", 0)
 
-	var opts []db.ProfileOption
-	if allowedTools != "" && allowedTools != "[]" {
-		opts = append(opts, db.WithAllowedTools(allowedTools))
-	}
-	if poolSize > 0 {
-		opts = append(opts, db.WithPoolSize(poolSize))
-	}
-
-	profile, err := h.db.RegisterProfile(project, slug, name, role, contextPack, soulKeys, skills, vaultPaths, opts...)
+	profile, err := h.db.RegisterProfile(project, slug, name, role, skills)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to register profile: %v", err)), nil
 	}
@@ -1203,7 +1473,6 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 	priority := req.GetString("priority", "P2")
 	parentTaskID := optionalString(req.GetString("parent_task_id", ""))
 	boardID := optionalString(req.GetString("board_id", ""))
-	goalID := optionalString(req.GetString("goal_id", ""))
 
 	// Resolve truncated board_id prefix to full UUID
 	if boardID != nil && len(*boardID) < 36 {
@@ -1216,25 +1485,13 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 		}
 	}
 
-	// Resolve truncated goal_id prefix to full UUID
-	if goalID != nil && len(*goalID) < 36 {
-		goals, _ := h.db.ListGoals(project, "", "", nil, 0)
-		for _, g := range goals {
-			if strings.HasPrefix(g.ID, *goalID) {
-				goalID = &g.ID
-				break
-			}
-		}
-	}
-
 	// Auto-create "human" profile if dispatching to it for the first time
 	if profile == "human" {
 		existing, _ := h.db.GetProfile(project, "human")
 		if existing == nil {
 			_, _ = h.db.RegisterProfile(project, "human", "Human Operator",
 				"Tasks that require human action (API keys, approvals, purchases, manual config)",
-				"You are the human operator. Complete these tasks outside the relay.",
-				"[]", "[]", "[]")
+				"[]")
 		}
 	}
 
@@ -1253,7 +1510,7 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 		}
 	}
 
-	task, err := h.db.DispatchTask(project, profile, agent, title, description, priority, parentTaskID, boardID, goalID)
+	task, err := h.db.DispatchTask(project, profile, agent, title, description, priority, parentTaskID, boardID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to dispatch task: %v", err)), nil
 	}
@@ -1279,11 +1536,7 @@ func (h *Handlers) HandleDispatchTask(ctx context.Context, req mcp.CallToolReque
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "dispatch", Agent: agent, Project: project, Target: profile, Label: title})
-
-	// Fire triggers for task_pending
-	go h.fireTriggers(project, "task_pending", map[string]string{
-		"profile": profile, "priority": priority, "task_id": task.ID, "dispatched_by": agent, "title": title,
-	})
+	emitTaskEvent(h.events, "task.dispatched", "dispatch", project, task)
 
 	resp := map[string]any{"task": task}
 	if autoBoard != nil {
@@ -1327,6 +1580,7 @@ func (h *Handlers) HandleClaimTask(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to claim task: %v", err)), nil
 	}
 	h.events.Emit(MCPEvent{Type: "task", Action: "claim", Agent: agent, Project: project, Label: task.Title})
+	emitTaskEvent(h.events, "task.claimed", "claim", project, task)
 	return h.resultJSONTracked(project, agent, "claim_task", task)
 }
 
@@ -1347,7 +1601,72 @@ func (h *Handlers) HandleStartTask(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to start task: %v", err)), nil
 	}
 	h.events.Emit(MCPEvent{Type: "task", Action: "start", Agent: agent, Project: project, Label: task.Title})
+	emitTaskEvent(h.events, "task.in_progress", "start", project, task)
 	return h.resultJSONTracked(project, agent, "start_task", task)
+}
+
+// HandleResumeTask transitions a blocked task back to in-progress.
+// Thin wrapper over StartTask (the DB allows the blocked→in-progress transition
+// already) — kept as a distinct MCP tool so agents discovering tools don't have
+// to guess that start_task resumes too.
+func (h *Handlers) HandleResumeTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	project := resolveProject(ctx, req)
+	agent := resolveAgent(ctx, req)
+	taskID := req.GetString("task_id", "")
+	if taskID == "" {
+		return mcp.NewToolResultError("task_id is required"), nil
+	}
+	taskID, err := h.resolveTaskID(taskID, project)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	existing, err := h.db.GetTask(taskID, project)
+	if err != nil || existing == nil {
+		return mcp.NewToolResultError("task not found"), nil
+	}
+	if existing.Status != "blocked" {
+		return mcp.NewToolResultError(fmt.Sprintf("task is not blocked (status=%s)", existing.Status)), nil
+	}
+
+	task, err := h.db.StartTask(taskID, agent, project)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to resume task: %v", err)), nil
+	}
+	h.events.Emit(MCPEvent{Type: "task", Action: "resume", Agent: agent, Project: project, Label: task.Title})
+	emitTaskEvent(h.events, "task.in_progress", "resume", project, task)
+
+	return h.resultJSONTracked(project, agent, "resume_task", task)
+}
+
+func (h *Handlers) HandleReviewTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	project := resolveProject(ctx, req)
+	agent := resolveAgent(ctx, req)
+	taskID := req.GetString("task_id", "")
+	if taskID == "" {
+		return mcp.NewToolResultError("task_id is required"), nil
+	}
+	taskID, err := h.resolveTaskID(taskID, project)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	task, err := h.db.ReviewTask(taskID, agent, project)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to mark task in-review: %v", err)), nil
+	}
+	h.events.Emit(MCPEvent{Type: "task", Action: "review", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
+	emitTaskEvent(h.events, "task.in_review", "review", project, task)
+
+	// Notify dispatcher — work is up for review.
+	h.registry.Notify(project, task.DispatchedBy, agent, fmt.Sprintf("In review: %s", task.Title), task.ID)
+
+	// Write-back (Linear mode): after the local stamp succeeds, fire-and-forget
+	// the agent's one owned transition (→ In Review + comment). No-op in native.
+	comment := optionalString(req.GetString("comment", ""))
+	pushInReviewAsync(h.getConnector(), task, agent, comment)
+
+	return h.resultJSONTracked(project, agent, "review_task", task)
 }
 
 func (h *Handlers) HandleCompleteTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1369,11 +1688,7 @@ func (h *Handlers) HandleCompleteTask(ctx context.Context, req mcp.CallToolReque
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "complete", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
-
-	// Fire triggers for task_completed
-	go h.fireTriggers(project, "task_completed", map[string]string{
-		"task_id": task.ID, "profile": task.ProfileSlug, "completed_by": agent, "title": task.Title,
-	})
+	emitTaskEvent(h.events, "task.done", "complete", project, task)
 
 	// Notify dispatcher
 	h.registry.Notify(project, task.DispatchedBy, agent, fmt.Sprintf("Task done: %s", task.Title), task.ID)
@@ -1424,16 +1739,11 @@ func (h *Handlers) HandleBlockTask(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "block", Agent: agent, Project: project, Target: task.DispatchedBy, Label: task.Title})
-
-	// Fire triggers for task_blocked + signal:alert
-	blockMeta := map[string]string{
-		"task_id": task.ID, "profile": task.ProfileSlug, "blocked_by": agent, "title": task.Title,
-	}
+	blockedExtra := map[string]any{}
 	if reason != nil {
-		blockMeta["reason"] = *reason
+		blockedExtra["reason"] = *reason
 	}
-	go h.fireTriggers(project, "task_blocked", blockMeta)
-	go h.fireTriggers(project, "signal:alert", blockMeta)
+	emitTaskEvent(h.events, "task.blocked", "block", project, task, blockedExtra)
 
 	// Notify dispatcher — blocked is critical
 	reasonStr := ""
@@ -1521,11 +1831,17 @@ func (h *Handlers) HandleUpdateTask(ctx context.Context, req mcp.CallToolRequest
 	description := optionalString(req.GetString("description", ""))
 	priority := optionalString(req.GetString("priority", ""))
 	boardID := optionalString(req.GetString("board_id", ""))
-	goalID := optionalString(req.GetString("goal_id", ""))
+	progressNote := req.GetString("progress_note", "")
 
-	task, err := h.db.UpdateTaskFields(taskID, project, title, description, priority, boardID, goalID)
+	task, err := h.db.UpdateTaskFields(taskID, project, title, description, priority, boardID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to update task: %v", err)), nil
+	}
+
+	if progressNote != "" {
+		if err := h.db.AddProgressNote(taskID, project, agent, progressNote); err == nil {
+			h.events.Emit(MCPEvent{Type: "task", Action: "progress", Agent: agent, Project: project, Label: task.Title})
+		}
 	}
 
 	h.events.Emit(MCPEvent{Type: "task", Action: "update", Agent: agent, Project: project, Label: task.Title})
@@ -1565,14 +1881,13 @@ func (h *Handlers) HandleMoveTask(ctx context.Context, req mcp.CallToolRequest) 
 	}
 
 	boardID := optionalString(req.GetString("board_id", ""))
-	goalID := optionalString(req.GetString("goal_id", ""))
 
-	if boardID == nil && goalID == nil {
-		return mcp.NewToolResultError("at least one of board_id or goal_id is required"), nil
+	if boardID == nil {
+		return mcp.NewToolResultError("board_id is required"), nil
 	}
 
 	// Resolve truncated board_id prefix
-	if boardID != nil && len(*boardID) > 0 && len(*boardID) < 36 {
+	if len(*boardID) > 0 && len(*boardID) < 36 {
 		boards, _ := h.db.ListBoards(project)
 		for _, b := range boards {
 			if strings.HasPrefix(b.ID, *boardID) {
@@ -1582,18 +1897,7 @@ func (h *Handlers) HandleMoveTask(ctx context.Context, req mcp.CallToolRequest) 
 		}
 	}
 
-	// Resolve truncated goal_id prefix
-	if goalID != nil && len(*goalID) > 0 && len(*goalID) < 36 {
-		goals, _ := h.db.ListGoals(project, "", "", nil, 0)
-		for _, g := range goals {
-			if strings.HasPrefix(g.ID, *goalID) {
-				goalID = &g.ID
-				break
-			}
-		}
-	}
-
-	task, err := h.db.UpdateTaskFields(taskID, project, nil, nil, nil, boardID, goalID)
+	task, err := h.db.UpdateTaskFields(taskID, project, nil, nil, nil, boardID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to move task: %v", err)), nil
 	}
@@ -1605,17 +1909,33 @@ func (h *Handlers) HandleMoveTask(ctx context.Context, req mcp.CallToolRequest) 
 func (h *Handlers) HandleBatchCompleteTasks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	project := resolveProject(ctx, req)
 	agent := resolveAgent(ctx, req)
-	tasksJSON := req.GetString("tasks", "[]")
+	tasksJSON := req.GetString("tasks", "")
 
 	var items []struct {
 		TaskID string  `json:"task_id"`
 		Result *string `json:"result"`
 	}
-	if err := json.Unmarshal([]byte(tasksJSON), &items); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid tasks JSON: %v", err)), nil
+	// Accept the common mistake task_ids:["..."] as a shorthand for
+	// tasks:[{task_id:"..."}] (no result).
+	if tasksJSON == "" {
+		if idsJSON := req.GetString("task_ids", ""); idsJSON != "" {
+			var ids []string
+			if err := json.Unmarshal([]byte(idsJSON), &ids); err == nil {
+				for _, id := range ids {
+					items = append(items, struct {
+						TaskID string  `json:"task_id"`
+						Result *string `json:"result"`
+					}{TaskID: id})
+				}
+			}
+		}
+	} else {
+		if err := json.Unmarshal([]byte(tasksJSON), &items); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid tasks JSON: %v", err)), nil
+		}
 	}
 	if len(items) == 0 {
-		return mcp.NewToolResultError("tasks array is empty"), nil
+		return mcp.NewToolResultError("tasks is required — pass tasks:'[{\"task_id\":\"...\",\"result\":\"...\"}]' (JSON string). As a shortcut, task_ids:'[\"id1\",\"id2\"]' is also accepted."), nil
 	}
 
 	var completed []string
@@ -1653,13 +1973,12 @@ func (h *Handlers) HandleBatchDispatchTasks(ctx context.Context, req mcp.CallToo
 		Description string  `json:"description"`
 		Priority    string  `json:"priority"`
 		BoardID     *string `json:"board_id"`
-		GoalID      *string `json:"goal_id"`
 	}
 	if err := json.Unmarshal([]byte(tasksJSON), &items); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid tasks JSON: %v", err)), nil
 	}
 	if len(items) == 0 {
-		return mcp.NewToolResultError("tasks array is empty"), nil
+		return mcp.NewToolResultError("tasks is required — pass tasks:'[{\"profile\":\"...\",\"title\":\"...\",\"priority\":\"P2\",\"board_id\":\"...\"}]' (JSON string). Only profile and title are required per item."), nil
 	}
 
 	var dispatched []map[string]string
@@ -1673,13 +1992,14 @@ func (h *Handlers) HandleBatchDispatchTasks(ctx context.Context, req mcp.CallToo
 		if priority == "" {
 			priority = "P2"
 		}
-		task, err := h.db.DispatchTask(project, item.Profile, agent, item.Title, item.Description, priority, nil, item.BoardID, item.GoalID)
+		task, err := h.db.DispatchTask(project, item.Profile, agent, item.Title, item.Description, priority, nil, item.BoardID)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", item.Title, err))
 			continue
 		}
 		dispatched = append(dispatched, map[string]string{"id": task.ID, "title": task.Title})
 		h.events.Emit(MCPEvent{Type: "task", Action: "dispatch", Agent: agent, Project: project, Target: item.Profile, Label: item.Title})
+		emitTaskEvent(h.events, "task.dispatched", "dispatch", project, task)
 	}
 
 	return h.resultJSONTracked(project, agent, "batch_dispatch_tasks", map[string]any{
@@ -1715,23 +2035,6 @@ func (h *Handlers) HandleGetTask(ctx context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError("task not found"), nil
 	}
 
-	// Include goal ancestry if task has a goal_id
-	if task.GoalID != nil && *task.GoalID != "" {
-		ancestry, _ := h.db.GetGoalAncestry(*task.GoalID, project)
-		goal, _ := h.db.GetGoal(*task.GoalID, project)
-		if goal != nil {
-			if ancestry == nil {
-				ancestry = []models.Goal{}
-			}
-			goalChain := append(ancestry, *goal)
-			resp := map[string]any{
-				"task":          task,
-				"goal_ancestry": goalChain,
-			}
-			return h.resultJSONTracked(project, "", "get_task", resp)
-		}
-	}
-
 	return h.resultJSONTracked(project, "", "get_task", task)
 }
 
@@ -1764,6 +2067,22 @@ func (h *Handlers) HandleListTasks(ctx context.Context, req mcp.CallToolRequest)
 		}
 	}
 
+	if f := req.GetString("format", "md"); f == "md" || f == "table" {
+		rows := make([][]string, len(tasks))
+		for i, t := range tasks {
+			outcome := strOrDash(t.Result)
+			if t.Status == "blocked" {
+				outcome = "BLOCKED: " + strOrDash(t.BlockedReason)
+			}
+			rows[i] = []string{
+				t.ID, t.Status, t.Priority, t.ProfileSlug, strOrDash(t.AssignedTo),
+				t.Title, t.Description, outcome,
+			}
+		}
+		table := renderTable([]string{"id", "status", "priority", "profile", "assigned_to", "title", "description", "result_or_blocked_reason"}, rows)
+		return h.resultTextTracked(project, "", "list_tasks", fmt.Sprintf("%d tasks\n%s", len(tasks), table))
+	}
+
 	return h.resultJSONTracked(project, "", "list_tasks", map[string]any{
 		"count": len(tasks),
 		"tasks": tasks,
@@ -1778,6 +2097,12 @@ func (h *Handlers) HandleClaimFiles(ctx context.Context, req mcp.CallToolRequest
 	filePaths := req.GetString("file_paths", "[]")
 	ttlSeconds := req.GetInt("ttl_seconds", 1800)
 
+	// Surface existing claims on the same files (advisory: no hard refusal,
+	// but the caller learns who else is editing so they can coordinate).
+	var requested []string
+	_ = json.Unmarshal([]byte(filePaths), &requested)
+	existing := h.findExistingClaims(project, agent, requested)
+
 	lock, err := h.db.ClaimFiles(project, agent, filePaths, ttlSeconds)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to claim files: %v", err)), nil
@@ -1788,7 +2113,50 @@ func (h *Handlers) HandleClaimFiles(ctx context.Context, req mcp.CallToolRequest
 	content := fmt.Sprintf("%s is now editing: %s", agent, filePaths)
 	_, _ = h.db.InsertMessage(project, agent, "*", "notification", subject, content, fmt.Sprintf(`{"tags":["file-lock"],"file_paths":%s}`, filePaths), "P1", 0, nil, nil)
 
-	return h.resultJSONTracked(project, agent, "claim_files", lock)
+	payload := map[string]any{"lock": lock}
+	if len(existing) > 0 {
+		payload["existing_claims"] = existing
+		payload["conflict"] = true
+	}
+	return h.resultJSONTracked(project, agent, "claim_files", payload)
+}
+
+// findExistingClaims returns claims held by other agents that overlap with the
+// requested paths. Used to decorate claim_files responses with a conflict hint.
+func (h *Handlers) findExistingClaims(project, selfAgent string, requested []string) []map[string]any {
+	if len(requested) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(requested))
+	for _, p := range requested {
+		want[p] = true
+	}
+	locks, err := h.db.ListFileLocks(project)
+	if err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, l := range locks {
+		if l.AgentName == selfAgent {
+			continue
+		}
+		var paths []string
+		_ = json.Unmarshal([]byte(l.FilePaths), &paths)
+		var overlap []string
+		for _, p := range paths {
+			if want[p] {
+				overlap = append(overlap, p)
+			}
+		}
+		if len(overlap) > 0 {
+			out = append(out, map[string]any{
+				"agent":       l.AgentName,
+				"overlapping": overlap,
+				"claimed_at":  l.ClaimedAt,
+			})
+		}
+	}
+	return out
 }
 
 func (h *Handlers) HandleReleaseFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -2108,14 +2476,9 @@ func buildOnboardingPrompt(name, description, cwd string, interactive bool) stri
 
 	b.WriteString("---\n\n")
 
-	// Phase 6 — Set goals & board
-	b.WriteString("## Phase 6 — Set goals & board\n\n")
-	b.WriteString("### 6a. Mission\n\n")
-	b.WriteString("```\ncreate_goal({\n  type: \"mission\",\n  title: \"<one-line mission for the project>\",\n  description: \"<what success looks like>\",\n  project: \"" + name + "\"\n})\n```\n\n")
-	b.WriteString("### 6b. Project goals\n\n")
-	b.WriteString("Break the mission into 2-4 concrete workstreams:\n\n")
-	b.WriteString("```\ncreate_goal({\n  type: \"project_goal\",\n  title: \"<workstream>\",\n  parent_goal_id: \"<mission ID>\",\n  project: \"" + name + "\"\n})\n```\n\n")
-	b.WriteString("### 6c. Backlog board\n\n")
+	// Phase 6 — Set up the board
+	b.WriteString("## Phase 6 — Set up the board\n\n")
+	b.WriteString("### 6a. Backlog board\n\n")
 	b.WriteString("```\ncreate_board({ name: \"Backlog\", slug: \"backlog\", description: \"Main task board\", project: \"" + name + "\" })\n```\n\n")
 
 	b.WriteString("---\n\n")
@@ -2128,7 +2491,6 @@ func buildOnboardingPrompt(name, description, cwd string, interactive bool) stri
 	b.WriteString("list_agents({ project: \"" + name + "\" })\n")
 	b.WriteString("list_teams({ project: \"" + name + "\" })\n")
 	b.WriteString("list_profiles({ project: \"" + name + "\" })\n")
-	b.WriteString("list_goals({ project: \"" + name + "\" })\n")
 	b.WriteString("list_boards({ project: \"" + name + "\" })\n")
 	b.WriteString("```\n\n")
 
@@ -2153,7 +2515,6 @@ func buildOnboardingPrompt(name, description, cwd string, interactive bool) stri
 	b.WriteString("- **Memories**: keys stored\n")
 	b.WriteString("- **Teams**: list with types\n")
 	b.WriteString("- **Profiles**: list with roles\n")
-	b.WriteString("- **Goals**: mission + project goals\n")
 	b.WriteString("- **Board**: ready for tasks\n")
 	b.WriteString("- **CTO**: registered, executive, broadcast enabled\n")
 	b.WriteString("- **Spawn commands**: listed above, ready to paste\n\n")
@@ -2162,10 +2523,10 @@ func buildOnboardingPrompt(name, description, cwd string, interactive bool) stri
 	// Phase 8 — Sprint planning
 	b.WriteString("## Phase 8 — Plan the first two sprints\n\n")
 	b.WriteString("Now that the colony is configured, plan the work.\n\n")
-	b.WriteString("Based on the project goals, codebase analysis, and current state of the project:\n\n")
+	b.WriteString("Based on the codebase analysis and current state of the project:\n\n")
 	b.WriteString("### Sprint 1 (immediate priorities)\n")
 	b.WriteString("Create 3-6 tasks for the most impactful work to do right now:\n\n")
-	b.WriteString("```\ndispatch_task({\n  title: \"<task title>\",\n  description: \"<what to do and acceptance criteria>\",\n  profile: \"<profile-slug>\",\n  priority: \"<p0-p3>\",\n  goal_id: \"<parent goal ID>\",\n  board_id: \"<backlog board ID>\",\n  project: \"" + name + "\"\n})\n```\n\n")
+	b.WriteString("```\ndispatch_task({\n  title: \"<task title>\",\n  description: \"<what to do and acceptance criteria>\",\n  profile: \"<profile-slug>\",\n  priority: \"<p0-p3>\",\n  board_id: \"<backlog board ID>\",\n  project: \"" + name + "\"\n})\n```\n\n")
 	b.WriteString("### Sprint 2 (next up)\n")
 	b.WriteString("Create 3-6 more tasks for the next wave of work. These can depend on Sprint 1 outputs.\n\n")
 	b.WriteString("Assign profiles based on the skills needed. Distribute work across teams — don't overload one profile.\n\n")
@@ -2248,113 +2609,6 @@ func (h *Handlers) HandleFindProfiles(ctx context.Context, req mcp.CallToolReque
 	})
 }
 
-// --- Goals ---
-
-func (h *Handlers) HandleCreateGoal(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	agent := resolveAgent(ctx, req)
-	goalType := req.GetString("type", "agent_goal")
-	title := req.GetString("title", "")
-	if title == "" {
-		return mcp.NewToolResultError("title is required"), nil
-	}
-	description := req.GetString("description", "")
-	parentGoalID := optionalString(req.GetString("parent_goal_id", ""))
-	ownerAgent := optionalString(req.GetString("owner_agent", ""))
-
-	goal, err := h.db.CreateGoal(project, goalType, title, description, agent, ownerAgent, parentGoalID)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to create goal: %v", err)), nil
-	}
-	h.events.Emit(MCPEvent{Type: "goal", Action: "create", Agent: agent, Project: project, Label: title})
-	return h.resultJSONTracked(project, agent, "create_goal", map[string]any{
-		"goal": goal,
-		"hint": "Goals are objectives, NOT tasks. To create actionable work items, use dispatch_task() and link them via goal_id. Goals track progress by counting linked tasks.",
-	})
-}
-
-func (h *Handlers) HandleListGoals(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	goalType := req.GetString("type", "")
-	status := req.GetString("status", "")
-	ownerAgent := optionalString(req.GetString("owner_agent", ""))
-	limit := req.GetInt("limit", 50)
-
-	goals, err := h.db.ListGoals(project, goalType, status, ownerAgent, limit)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to list goals: %v", err)), nil
-	}
-	if goals == nil {
-		goals = []models.Goal{}
-	}
-
-	// Enrich with progress
-	type goalWithProgress struct {
-		models.Goal
-		TotalTasks int     `json:"total_tasks"`
-		DoneTasks  int     `json:"done_tasks"`
-		Progress   float64 `json:"progress"`
-	}
-	enriched := make([]goalWithProgress, 0, len(goals))
-	for _, g := range goals {
-		total, done := h.db.GetGoalProgress(g.ID, project)
-		var progress float64
-		if total > 0 {
-			progress = float64(done) / float64(total)
-		}
-		enriched = append(enriched, goalWithProgress{Goal: g, TotalTasks: total, DoneTasks: done, Progress: progress})
-	}
-
-	return h.resultJSONTracked(project, "", "list_goals", map[string]any{
-		"count": len(enriched),
-		"goals": enriched,
-	})
-}
-
-func (h *Handlers) HandleGetGoal(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	goalID := req.GetString("goal_id", "")
-	if goalID == "" {
-		return mcp.NewToolResultError("goal_id is required"), nil
-	}
-
-	gwp, err := h.db.GetGoalWithProgress(goalID, project)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to get goal: %v", err)), nil
-	}
-	if gwp == nil {
-		return mcp.NewToolResultError("goal not found"), nil
-	}
-	return h.resultJSONTracked(project, "", "get_goal", gwp)
-}
-
-func (h *Handlers) HandleUpdateGoal(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	goalID := req.GetString("goal_id", "")
-	if goalID == "" {
-		return mcp.NewToolResultError("goal_id is required"), nil
-	}
-	title := optionalString(req.GetString("title", ""))
-	description := optionalString(req.GetString("description", ""))
-	status := optionalString(req.GetString("status", ""))
-
-	goal, err := h.db.UpdateGoal(goalID, project, title, description, status)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to update goal: %v", err)), nil
-	}
-	return h.resultJSONTracked(project, "", "update_goal", goal)
-}
-
-func (h *Handlers) HandleGetGoalCascade(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-
-	cascade, err := h.db.GetGoalCascade(project)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to get goal cascade: %v", err)), nil
-	}
-	return h.resultJSONTracked(project, "", "get_goal_cascade", cascade)
-}
-
 // --- Session context ---
 
 func (h *Handlers) buildSessionContext(project, agentName string, profileSlug *string) map[string]any {
@@ -2368,7 +2622,8 @@ func (h *Handlers) buildSessionContext(project, agentName string, profileSlug *s
 		}
 	}
 
-	// Tasks
+	// Tasks — project through paper's Def. 7 (Budget Projection) to bound
+	// session_context payload. Full task bodies are fetched via get_task(id).
 	assignedToMe, dispatchedByMe, _ := h.db.GetAgentTasks(project, agentName)
 	if assignedToMe == nil {
 		assignedToMe = []models.Task{}
@@ -2376,37 +2631,23 @@ func (h *Handlers) buildSessionContext(project, agentName string, profileSlug *s
 	if dispatchedByMe == nil {
 		dispatchedByMe = []models.Task{}
 	}
-	// Build goal context for assigned tasks that have goal_id
-	goalContext := map[string]any{}
-	for _, t := range assignedToMe {
-		if t.GoalID != nil && *t.GoalID != "" {
-			if _, seen := goalContext[*t.GoalID]; !seen {
-				ancestry, _ := h.db.GetGoalAncestry(*t.GoalID, project)
-				goal, _ := h.db.GetGoal(*t.GoalID, project)
-				if goal != nil {
-					if ancestry == nil {
-						ancestry = []models.Goal{}
-					}
-					goalContext[*t.GoalID] = append(ancestry, *goal)
-				}
-			}
-		}
-	}
-
 	result["pending_tasks"] = map[string]any{
-		"assigned_to_me":   assignedToMe,
-		"dispatched_by_me": dispatchedByMe,
-	}
-	if len(goalContext) > 0 {
-		result["goal_context"] = goalContext
+		"assigned_to_me":   projectTasks(assignedToMe, 8000),
+		"dispatched_by_me": projectTasks(dispatchedByMe, 3000),
 	}
 
-	// Unread messages (full content, not truncated)
+	// Unread messages — projected through Def. 7 so verbose alert bodies
+	// (Prometheus/GlitchTip digests ~4k chars each) can't blow up the boot
+	// payload. Content is preview-truncated; full bodies via get_inbox(full_content=true).
 	unread, err := h.db.GetInbox(project, agentName, true, 50)
 	if err != nil || unread == nil {
 		unread = []models.Message{}
 	}
-	result["unread_messages"] = unread
+	projected := projectMessages(unread, sessionUnreadBudget)
+	result["unread_messages"] = projected
+	if len(projected) < len(unread) {
+		result["unread_omitted"] = len(unread) - len(projected)
+	}
 
 	// Active conversations
 	convs, err := h.db.ListConversations(project, agentName)
@@ -2422,36 +2663,7 @@ func (h *Handlers) buildSessionContext(project, agentName string, profileSlug *s
 	}
 	result["relevant_memories"] = memories
 
-	// Vault context: auto-inject docs based on profile vault_paths
-	if profileSlug != nil && *profileSlug != "" {
-		profile, _ := h.db.GetProfile(project, *profileSlug)
-		if profile != nil && profile.VaultPaths != "" && profile.VaultPaths != "[]" {
-			var paths []string
-			if err := json.Unmarshal([]byte(profile.VaultPaths), &paths); err == nil && len(paths) > 0 {
-				// Resolve {slug} template
-				resolved := make([]string, len(paths))
-				for i, p := range paths {
-					resolved[i] = strings.ReplaceAll(p, "{slug}", *profileSlug)
-				}
-
-				// Max ~4000 bytes (conservative estimate for ~4000 tokens)
-				maxBytes := 16000 // ~4000 tokens at ~4 bytes/token
-				docs, _ := h.db.GetVaultDocsByPaths(project, resolved, maxBytes)
-				if len(docs) > 0 {
-					type vaultCtx struct {
-						Path    string `json:"path"`
-						Title   string `json:"title"`
-						Content string `json:"content"`
-					}
-					vaultDocs := make([]vaultCtx, len(docs))
-					for i, d := range docs {
-						vaultDocs[i] = vaultCtx{Path: d.Path, Title: d.Title, Content: d.Content}
-					}
-					result["vault_context"] = vaultDocs
-				}
-			}
-		}
-	}
+	// Vault/doc context is served externally (ctx.prod.synergix.ch), not injected here.
 
 	return result
 }
@@ -2753,151 +2965,5 @@ func (h *Handlers) HandleAddNotifyChannel(ctx context.Context, req mcp.CallToolR
 		"agent":  agent,
 		"target": target,
 		"added":  true,
-	})
-}
-
-// --- Vault ---
-
-func (h *Handlers) HandleRegisterVault(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	path := req.GetString("path", "")
-	if path == "" {
-		return mcp.NewToolResultError("path is required"), nil
-	}
-
-	// Verify path exists and is a directory
-	info, err := os.Stat(path)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("path not accessible: %v", err)), nil
-	}
-	if !info.IsDir() {
-		return mcp.NewToolResultError("path must be a directory"), nil
-	}
-
-	// Save to DB
-	if err := h.db.RegisterVault(project, path); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to register vault: %v", err)), nil
-	}
-
-	// Start indexing + watching
-	cfg := models.VaultConfig{Path: path, Project: project}
-	if h.vaultWatcher != nil {
-		h.vaultWatcher.AddVault(cfg)
-	}
-
-	// Get stats
-	count, totalSize, _ := h.db.GetVaultStats(project)
-
-	// Check if any profiles exist with empty vault_paths
-	profiles, _ := h.db.ListProfiles(project)
-	var emptyVaultProfiles []string
-	for _, p := range profiles {
-		if p.VaultPaths == "" || p.VaultPaths == "[]" {
-			emptyVaultProfiles = append(emptyVaultProfiles, p.Slug)
-		}
-	}
-
-	resp := map[string]any{
-		"registered":   true,
-		"project":      project,
-		"path":         path,
-		"docs_indexed": count,
-		"total_bytes":  totalSize,
-	}
-	if len(emptyVaultProfiles) > 0 {
-		resp["hint"] = fmt.Sprintf("Profiles with empty vault_paths: %v. Consider updating them with register_profile to auto-inject vault docs at boot.", emptyVaultProfiles)
-	}
-	return h.resultJSONTracked(project, "", "register_vault", resp)
-}
-
-func (h *Handlers) HandleSearchVault(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	query := req.GetString("query", "")
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
-	}
-	limit := req.GetInt("limit", 10)
-
-	var tags []string
-	if tagsJSON := req.GetString("tags", ""); tagsJSON != "" && tagsJSON != "[]" {
-		_ = json.Unmarshal([]byte(tagsJSON), &tags)
-	}
-
-	results, err := h.db.SearchVault(project, query, tags, limit)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
-	}
-	if results == nil {
-		results = []models.VaultSearchResult{}
-	}
-
-	return h.resultJSONTracked(project, "", "search_vault", map[string]any{
-		"query":   query,
-		"count":   len(results),
-		"results": results,
-	})
-}
-
-func (h *Handlers) HandleGetVaultDoc(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	path := req.GetString("path", "")
-	if path == "" {
-		return mcp.NewToolResultError("path is required"), nil
-	}
-
-	doc, err := h.db.GetVaultDoc(project, path)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to get vault doc: %v", err)), nil
-	}
-	if doc == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("vault doc not found: %s", path)), nil
-	}
-
-	return h.resultJSONTracked(project, "", "get_vault_doc", doc)
-}
-
-func (h *Handlers) HandleListVaultDocs(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	project := resolveProject(ctx, req)
-	limit := req.GetInt("limit", 100)
-
-	var tags []string
-	if tagsJSON := req.GetString("tags", ""); tagsJSON != "" && tagsJSON != "[]" {
-		_ = json.Unmarshal([]byte(tagsJSON), &tags)
-	}
-
-	docs, err := h.db.ListVaultDocs(project, tags, limit)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to list vault docs: %v", err)), nil
-	}
-	if docs == nil {
-		docs = []models.VaultDoc{}
-	}
-
-	// Return metadata only (strip content)
-	type docMeta struct {
-		Path      string `json:"path"`
-		Title     string `json:"title"`
-		Owner     string `json:"owner"`
-		Status    string `json:"status"`
-		Tags      string `json:"tags"`
-		SizeBytes int    `json:"size_bytes"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	metas := make([]docMeta, len(docs))
-	for i, d := range docs {
-		metas[i] = docMeta{
-			Path: d.Path, Title: d.Title, Owner: d.Owner,
-			Status: d.Status, Tags: d.Tags, SizeBytes: d.SizeBytes,
-			UpdatedAt: d.UpdatedAt,
-		}
-	}
-
-	count, totalSize, _ := h.db.GetVaultStats(project)
-
-	return h.resultJSONTracked(project, "", "list_vault_docs", map[string]any{
-		"count":       len(metas),
-		"total_docs":  count,
-		"total_bytes": totalSize,
-		"docs":        metas,
 	})
 }

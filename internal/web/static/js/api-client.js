@@ -12,9 +12,7 @@ export class APIClient {
     this._msgTimer = null;
     this._convTimer = null;
     this._taskTimer = null;
-    this._goalTimer = null;
     this._running = false;
-    this.onGoals = null;
   }
 
   start() {
@@ -38,9 +36,6 @@ export class APIClient {
 
     // Poll tasks every 3s
     this._taskTimer = setInterval(() => this.fetchLatestTasks(), 3000);
-
-    // Poll goals every 10s
-    this._goalTimer = setInterval(() => this._refreshGoals(), 10000);
 
     // SSE for real-time activity + agent status (<100ms)
     this._sseConnected = false;
@@ -82,7 +77,6 @@ export class APIClient {
     clearInterval(this._msgTimer);
     clearInterval(this._convTimer);
     clearInterval(this._taskTimer);
-    clearInterval(this._goalTimer);
     if (this._activitySource) this._activitySource.close();
     clearInterval(this._activityTimer);
   }
@@ -231,78 +225,6 @@ export class APIClient {
     }
   }
 
-  async _refreshGoals() {
-    if (this.onGoals) {
-      const goals = await this.fetchAllGoals();
-      this.onGoals(goals);
-    }
-  }
-
-  // --- Goal API ---
-
-  async fetchAllGoals() {
-    try {
-      const res = await fetch("/api/goals/all");
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async fetchGoals(params = {}) {
-    try {
-      const qs = new URLSearchParams();
-      if (params.project) qs.set("project", params.project);
-      if (params.type) qs.set("type", params.type);
-      if (params.status) qs.set("status", params.status);
-      const res = await fetch(`/api/goals?${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async fetchGoalCascade(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : "";
-      const res = await fetch(`/api/goals/cascade${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async createGoal(data) {
-    try {
-      const res = await fetch("/api/goals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
-  }
-
-  async updateGoal(goalId, data) {
-    try {
-      const res = await fetch(`/api/goals/${goalId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
-  }
-
   // --- Task API ---
 
   async fetchAllTasks() {
@@ -445,11 +367,16 @@ export class APIClient {
     }
   }
 
-  // --- Vault API ---
+  // --- Kanban board (mirror read-replica) ---
 
-  async fetchAllVaultDocs() {
+  // One call, all board tasks for a project (optionally a single cycle). Zero
+  // Linear round-trips. cycle: "active" | "all" | cycle_id | "".
+  async fetchBoardTasks(project, cycle) {
     try {
-      const res = await fetch("/api/vault/docs/all");
+      const qs = new URLSearchParams();
+      if (project) qs.set("project", project);
+      if (cycle) qs.set("cycle", cycle);
+      const res = await fetch(`/api/tasks/board?${qs}`);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -457,195 +384,51 @@ export class APIClient {
     }
   }
 
-  async fetchVaultDocs(project, tags) {
-    try {
-      const qs = new URLSearchParams();
-      if (project) qs.set("project", project);
-      if (tags) qs.set("tags", JSON.stringify(tags));
-      const res = await fetch(`/api/vault/docs?${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch {
-      return [];
-    }
-  }
-
-  async searchVaultDocs(project, query) {
-    try {
-      const qs = new URLSearchParams();
-      if (project) qs.set("project", project);
-      qs.set("q", query);
-      const res = await fetch(`/api/vault/search?${qs}`);
-      if (!res.ok) return { results: [] };
-      return await res.json();
-    } catch {
-      return { results: [] };
-    }
-  }
-
-  async fetchVaultDoc(project, path) {
+  async fetchCycles(project) {
     try {
       const qs = project ? `?project=${encodeURIComponent(project)}` : "";
-      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-      const res = await fetch(`/api/vault/doc/${encodedPath}${qs}`);
-      if (!res.ok) return null;
+      const res = await fetch(`/api/cycles${qs}`);
+      if (!res.ok) return [];
       return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async fetchTaskProgress(taskId, project) {
+    try {
+      const qs = project ? `?project=${encodeURIComponent(project)}` : "";
+      const res = await fetch(`/api/tasks/${taskId}/progress${qs}`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  // Subscribe to the semantic task lifecycle stream (/api/events/stream).
+  // onTaskEvent receives the parsed MCPEvent for any task.* event. Returns the
+  // EventSource so the caller can close it.
+  subscribeTaskEvents(onTaskEvent) {
+    let src;
+    try {
+      src = new EventSource("/api/events/stream");
     } catch {
       return null;
     }
-  }
-
-  async updateVaultDoc(project, path, content) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : "";
-      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-      const res = await fetch(`/api/vault/doc/${encodedPath}${qs}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  // --- Triggers API ---
-
-  async fetchTriggers(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/triggers${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async fetchTriggerHistory(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/trigger-history${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async createTrigger(data) {
-    try {
-      const res = await fetch('/api/triggers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async deleteTrigger(id) {
-    try {
-      const res = await fetch(`/api/triggers/${id}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  // --- Poll Triggers API ---
-
-  async fetchPollTriggers(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/poll-triggers${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async createPollTrigger(data) {
-    try {
-      const res = await fetch('/api/poll-triggers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async deletePollTrigger(id) {
-    try {
-      const res = await fetch(`/api/poll-triggers/${id}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  async testPollTrigger(id) {
-    try {
-      const res = await fetch(`/api/poll-triggers/${id}/test`, { method: 'POST' });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch { return null; }
-  }
-
-  // --- Skills API ---
-
-  async fetchSkills(project, agent) {
-    try {
-      let qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      if (agent) qs += `&agent=${encodeURIComponent(agent)}`;
-      const res = await fetch(`/api/skills${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async createSkill(data) {
-    try {
-      const res = await fetch('/api/skills', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async fetchSkillProfiles(name, project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/skills/${encodeURIComponent(name)}/profiles${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  // --- Quotas API ---
-
-  async fetchQuotas(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/quotas${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async fetchAgentQuota(agent, project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/quotas/${encodeURIComponent(agent)}${qs}`);
-      if (!res.ok) return null;
-      return await res.json();
-    } catch { return null; }
-  }
-
-  async updateAgentQuota(agent, data) {
-    try {
-      const res = await fetch(`/api/quotas/${encodeURIComponent(agent)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
+    src.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        if (evt && typeof evt.type === "string" && evt.type.startsWith("task.")) {
+          onTaskEvent(evt);
+        }
+      } catch {
+        // ignore malformed frames
+      }
+    };
+    src.onerror = () => { /* browser auto-reconnects EventSource */ };
+    this._eventsSource = src;
+    return src;
   }
 
   // --- Profiles API ---
@@ -668,102 +451,6 @@ export class APIClient {
     } catch { return null; }
   }
 
-  async createProfile(data) {
-    try {
-      const res = await fetch('/api/profiles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async updateProfile(slug, data) {
-    try {
-      const qs = data.project ? `?project=${encodeURIComponent(data.project)}` : '';
-      const res = await fetch(`/api/profiles/${encodeURIComponent(slug)}${qs}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async deleteProfile(slug, project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/profiles/${encodeURIComponent(slug)}${qs}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  async deactivateAgent(name, project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/agents/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  async deleteSkill(name, project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/skills/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  async deleteQuota(agent, project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/quotas/${encodeURIComponent(agent)}${qs}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  // --- Service Discovery API ---
-
-  async discoverBySkill(project, skill) {
-    try {
-      const qs = new URLSearchParams();
-      if (project) qs.set('project', project);
-      if (skill) qs.set('skill', skill);
-      const res = await fetch(`/api/discover?${qs}`);
-      if (!res.ok) return null;
-      return await res.json();
-    } catch { return null; }
-  }
-
-  // --- Elevations API ---
-
-  async fetchElevations(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/elevations${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async grantElevation(data) {
-    try {
-      const res = await fetch('/api/elevations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async revokeElevation(id) {
-    try {
-      const res = await fetch(`/api/elevations/${id}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
 
   // --- Projects API ---
 
@@ -828,17 +515,6 @@ export class APIClient {
     }
   }
 
-  async fetchVaultStats(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : "";
-      const res = await fetch(`/api/vault/stats${qs}`);
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
-  }
-
   async fetchTokenUsage(period = "24h") {
     try {
       const res = await fetch(`/api/token-usage?period=${encodeURIComponent(period)}`);
@@ -873,245 +549,5 @@ export class APIClient {
       if (!res.ok) return [];
       return await res.json();
     } catch { return []; }
-  }
-
-  // --- Cycles API ---
-
-  async fetchCycles(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/cycles${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async createCycle(data) {
-    try {
-      const res = await fetch('/api/cycles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async updateCycle(name, data) {
-    try {
-      const res = await fetch(`/api/cycles/${encodeURIComponent(name)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async deleteCycle(name, project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/cycles/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  // --- Workflows API ---
-
-  async fetchWorkflows(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/workflows${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async fetchWorkflow(id) {
-    try {
-      const res = await fetch(`/api/workflows/${encodeURIComponent(id)}`);
-      if (!res.ok) return null;
-      return await res.json();
-    } catch { return null; }
-  }
-
-  async createWorkflow(data) {
-    try {
-      const res = await fetch('/api/workflows', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async updateWorkflow(id, data) {
-    try {
-      const res = await fetch(`/api/workflows/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async deleteWorkflow(id) {
-    try {
-      const res = await fetch(`/api/workflows/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  async executeWorkflow(id, meta = {}) {
-    try {
-      const res = await fetch(`/api/workflows/${encodeURIComponent(id)}/execute`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meta }),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async fetchWorkflowRuns(workflowId, limit = 20) {
-    try {
-      const res = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/runs?limit=${limit}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async fetchWorkflowRunDetail(runId) {
-    try {
-      const res = await fetch(`/api/workflow-runs/${encodeURIComponent(runId)}`);
-      if (!res.ok) return null;
-      return await res.json();
-    } catch { return null; }
-  }
-
-  // --- Schedules API ---
-
-  async fetchSchedules(project) {
-    try {
-      const qs = project ? `?project=${encodeURIComponent(project)}` : '';
-      const res = await fetch(`/api/schedules${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async fetchAgentSchedules(project, agent) {
-    try {
-      const qs = new URLSearchParams();
-      if (project) qs.set('project', project);
-      if (agent) qs.set('agent', agent);
-      const res = await fetch(`/api/schedules?${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async createSchedule(data) {
-    try {
-      const res = await fetch('/api/schedules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async updateSchedule(id, data) {
-    try {
-      const res = await fetch(`/api/schedules/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async deleteSchedule(id) {
-    try {
-      const res = await fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  async triggerSchedule(id) {
-    try {
-      const res = await fetch(`/api/schedules/${encodeURIComponent(id)}/trigger`, { method: 'POST' });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  // --- Spawn API ---
-
-  async fetchCycleHistory(project, agent) {
-    try {
-      const qs = new URLSearchParams();
-      if (project) qs.set('project', project);
-      if (agent) qs.set('agent', agent);
-      const res = await fetch(`/api/cycle-history?${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async fetchSpawnChildren(project, agent, status) {
-    try {
-      const qs = new URLSearchParams();
-      if (project) qs.set('project', project);
-      if (agent) qs.set('agent', agent);
-      if (status) qs.set('status', status);
-      const res = await fetch(`/api/spawn/children?${qs}`);
-      if (!res.ok) return [];
-      return await res.json();
-    } catch { return []; }
-  }
-
-  async killSpawnChild(id) {
-    try {
-      const res = await fetch(`/api/spawn/children/${encodeURIComponent(id)}/kill`, { method: 'POST' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  async spawnWithContext(data) {
-    try {
-      const res = await fetch('/api/spawn/context', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async terminalSpawn(data) {
-    try {
-      const res = await fetch('/api/terminal/spawn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      return res.ok ? await res.json() : null;
-    } catch { return null; }
-  }
-
-  async terminalKill(sessionId) {
-    try {
-      const res = await fetch(`/api/terminal/${encodeURIComponent(sessionId)}/kill`, { method: 'POST' });
-      return res.ok;
-    } catch { return false; }
-  }
-
-  terminalWsUrl(sessionId) {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}/api/terminal/ws/${sessionId}`;
   }
 }

@@ -4,186 +4,86 @@ import (
 	"context"
 	"io/fs"
 	"log"
-	"log/slog"
 	"net/http"
-	"os"
+	"sync"
 	"time"
 
 	"agent-relay/internal/config"
+	"agent-relay/internal/connector"
+	linearconn "agent-relay/internal/connector/linear"
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
-	"agent-relay/internal/lock"
-	"agent-relay/internal/scheduler"
-	"agent-relay/internal/spawn"
-	"agent-relay/internal/vault"
 	"agent-relay/internal/web"
-	"agent-relay/internal/workflow"
 
 	"github.com/mark3labs/mcp-go/server"
 )
 
 // Relay is the main struct that wires together the MCP server, DB, and notifications.
 type Relay struct {
-	MCPServer      *server.MCPServer
-	HTTP           *server.StreamableHTTPServer
-	DB             *db.DB
-	Registry       *SessionRegistry
-	Ingester       *ingest.Ingester
-	VaultWatcher   *vault.Watcher
-	Events         *EventBus
-	SpawnMgr       *spawn.Manager
-	Scheduler      *scheduler.Scheduler
-	PTYMgr         *spawn.PTYManager
-	Handlers       *Handlers
-	WorkflowEngine *workflow.Engine
-	Config         config.Config
-	httpServer     *http.Server
-	StartedAt      time.Time
+	MCPServer *server.MCPServer
+	HTTP      *server.StreamableHTTPServer
+	DB        *db.DB
+	Registry  *SessionRegistry
+	Ingester  *ingest.Ingester
+	Events    *EventBus
+	Handlers  *Handlers
+	Notifier  *Notifier
+	// Linear connector runtime — swapped at runtime by ReconfigureLinear()
+	// (settings-driven, no restart). Read through LinearConnector()/TaskConn().
+	linearMu   sync.RWMutex
+	linearConn *linearconn.Connector   // nil when inactive
+	taskConn   connector.TaskConnector // Noop when inactive
+	linearStop chan struct{}           // closes the current reconcile loop
+	Config     config.Config
+	// Version is the build tag, injected from main.Version.
+	// Defaults to "dev" when built without ldflags.
+	Version    string
+	httpServer *http.Server
+	StartedAt  time.Time
 }
 
 // New creates a fully wired Relay with all tools registered.
-func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher, cfg config.Config) *Relay {
+// Caller should set r.Version after construction if known (injected from main.Version).
+func New(database *db.DB, ingester *ingest.Ingester, cfg config.Config) *Relay {
+	version := cfg.Version
+	if version == "" {
+		version = "dev"
+	}
 	mcpSrv := server.NewMCPServer(
 		"wrai.th",
-		"0.5.0",
+		version,
 		server.WithToolCapabilities(false),
 		server.WithLogging(),
 		server.WithRecovery(),
+		server.WithToolFilter(toolsModeFilter),
 	)
 
 	events := NewEventBus()
 	registry := NewSessionRegistry(mcpSrv)
-	handlers := NewHandlers(database, registry, ingester, vaultWatcher, events)
+	handlers := NewHandlers(database, registry, ingester, events)
 
-	// Initialize spawn infrastructure
-	logger := log.Default()
-	slogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	executor := spawn.NewExecutor(cfg.ClaudeBinary, slogger)
-	lockMgr := lock.NewManager(cfg.LocksDir, "relay-", slogger)
-	queue := lock.NewPriorityQueue(slogger)
-	sched := scheduler.New(slogger)
-
-	var spawnMgr *spawn.Manager
-	var ptyMgr *spawn.PTYManager
-	if executor.IsClaudeAvailable() {
-		spawnMgr = spawn.NewManager(database, executor, lockMgr, queue, sched, cfg.MaxPoolSize, slogger)
-		ptyMgr = spawn.NewPTYManager(executor)
-		handlers.SetSpawnManager(spawnMgr)
-		logger.Println("spawn: claude binary found, spawn/schedule/terminal enabled")
-	} else {
-		logger.Println("spawn: claude binary not found, spawn/schedule disabled")
+	// Register every tool from the registry (single source of truth in
+	// toolset.go), plus the discovery pair used by ?tools=discovery
+	// connections. toolsModeFilter decides which side a session sees.
+	regTools := handlers.toolRegistry()
+	serverTools := make([]server.ServerTool, 0, len(regTools)+2)
+	for _, rt := range regTools {
+		serverTools = append(serverTools, rt.ServerTool)
 	}
+	// Initialize notifications subsystem (rules evaluator + digest scheduler).
+	// Seeds default rules on first run.
+	notifier := NewNotifier(database, registry, events)
+	handlers.SetNotifier(notifier)
 
-	// Initialize workflow engine
-	wfEngine := workflow.NewEngine(database, spawnMgr)
-	// Wire message and task functions so workflows can send messages and dispatch tasks
-	wfEngine.SetMessageFunc(func(project, from, to, msgType, subject, content string) error {
-		_, err := database.InsertMessage(project, from, to, msgType, subject, content, "{}", "P2", 0, nil, nil)
-		return err
-	})
-	wfEngine.SetTaskFunc(func(project, profile, title, desc string) (string, error) {
-		task, err := database.DispatchTask(project, profile, "workflow-engine", title, desc, "P2", nil, nil, nil)
-		if err != nil {
-			return "", err
-		}
-		return task.ID, nil
-	})
+	// The Linear connector is wired after construction via ReconfigureLinear()
+	// (env or settings driven); until then every call site sees Noop.
+	handlers.SetConnector(connector.Noop{})
 
-	handlers.SetWorkflowEngine(wfEngine)
-
-	// Register all tools
-	mcpSrv.AddTools(
-		server.ServerTool{Tool: whoamiTool(), Handler: handlers.HandleWhoami},
-		server.ServerTool{Tool: registerAgentTool(), Handler: handlers.HandleRegisterAgent},
-		server.ServerTool{Tool: sendMessageTool(), Handler: handlers.HandleSendMessage},
-		server.ServerTool{Tool: getInboxTool(), Handler: handlers.HandleGetInbox},
-		server.ServerTool{Tool: ackDeliveryTool(), Handler: handlers.HandleAckDelivery},
-		server.ServerTool{Tool: getThreadTool(), Handler: handlers.HandleGetThread},
-		server.ServerTool{Tool: listAgentsTool(), Handler: handlers.HandleListAgents},
-		server.ServerTool{Tool: markReadTool(), Handler: handlers.HandleMarkRead},
-		server.ServerTool{Tool: createConversationTool(), Handler: handlers.HandleCreateConversation},
-		server.ServerTool{Tool: listConversationsTool(), Handler: handlers.HandleListConversations},
-		server.ServerTool{Tool: getConversationMessagesTool(), Handler: handlers.HandleGetConversationMessages},
-		server.ServerTool{Tool: inviteToConversationTool(), Handler: handlers.HandleInviteToConversation},
-		server.ServerTool{Tool: leaveConversationTool(), Handler: handlers.HandleLeaveConversation},
-		server.ServerTool{Tool: archiveConversationTool(), Handler: handlers.HandleArchiveConversation},
-		// Memory tools
-		server.ServerTool{Tool: setMemoryTool(), Handler: handlers.HandleSetMemory},
-		server.ServerTool{Tool: getMemoryTool(), Handler: handlers.HandleGetMemory},
-		server.ServerTool{Tool: searchMemoryTool(), Handler: handlers.HandleSearchMemory},
-		server.ServerTool{Tool: listMemoriesTool(), Handler: handlers.HandleListMemories},
-		server.ServerTool{Tool: deleteMemoryTool(), Handler: handlers.HandleDeleteMemory},
-		server.ServerTool{Tool: resolveConflictTool(), Handler: handlers.HandleResolveConflict},
-		// Profile tools
-		server.ServerTool{Tool: registerProfileTool(), Handler: handlers.HandleRegisterProfile},
-		server.ServerTool{Tool: getProfileTool(), Handler: handlers.HandleGetProfile},
-		server.ServerTool{Tool: listProfilesTool(), Handler: handlers.HandleListProfiles},
-		server.ServerTool{Tool: findProfilesTool(), Handler: handlers.HandleFindProfiles},
-		// Task tools
-		server.ServerTool{Tool: dispatchTaskTool(), Handler: handlers.HandleDispatchTask},
-		server.ServerTool{Tool: claimTaskTool(), Handler: handlers.HandleClaimTask},
-		server.ServerTool{Tool: startTaskTool(), Handler: handlers.HandleStartTask},
-		server.ServerTool{Tool: completeTaskTool(), Handler: handlers.HandleCompleteTask},
-		server.ServerTool{Tool: blockTaskTool(), Handler: handlers.HandleBlockTask},
-		server.ServerTool{Tool: cancelTaskTool(), Handler: handlers.HandleCancelTask},
-		server.ServerTool{Tool: getTaskTool(), Handler: handlers.HandleGetTask},
-		server.ServerTool{Tool: listTasksTool(), Handler: handlers.HandleListTasks},
-		server.ServerTool{Tool: updateTaskTool(), Handler: handlers.HandleUpdateTask},
-		server.ServerTool{Tool: archiveTasksTool(), Handler: handlers.HandleArchiveTasks},
-		server.ServerTool{Tool: moveTaskTool(), Handler: handlers.HandleMoveTask},
-		server.ServerTool{Tool: batchCompleteTasksTool(), Handler: handlers.HandleBatchCompleteTasks},
-		server.ServerTool{Tool: batchDispatchTasksTool(), Handler: handlers.HandleBatchDispatchTasks},
-		// Boards
-		server.ServerTool{Tool: createBoardTool(), Handler: handlers.HandleCreateBoard},
-		server.ServerTool{Tool: listBoardsTool(), Handler: handlers.HandleListBoards},
-		server.ServerTool{Tool: archiveBoardTool(), Handler: handlers.HandleArchiveBoard},
-		server.ServerTool{Tool: deleteBoardTool(), Handler: handlers.HandleDeleteBoard},
-		// Goals
-		server.ServerTool{Tool: createGoalTool(), Handler: handlers.HandleCreateGoal},
-		server.ServerTool{Tool: listGoalsTool(), Handler: handlers.HandleListGoals},
-		server.ServerTool{Tool: getGoalTool(), Handler: handlers.HandleGetGoal},
-		server.ServerTool{Tool: updateGoalTool(), Handler: handlers.HandleUpdateGoal},
-		server.ServerTool{Tool: getGoalCascadeTool(), Handler: handlers.HandleGetGoalCascade},
-		// Vault
-		server.ServerTool{Tool: registerVaultTool(), Handler: handlers.HandleRegisterVault},
-		server.ServerTool{Tool: searchVaultTool(), Handler: handlers.HandleSearchVault},
-		server.ServerTool{Tool: getVaultDocTool(), Handler: handlers.HandleGetVaultDoc},
-		server.ServerTool{Tool: listVaultDocsTool(), Handler: handlers.HandleListVaultDocs},
-		// File locks
-		server.ServerTool{Tool: claimFilesTool(), Handler: handlers.HandleClaimFiles},
-		server.ServerTool{Tool: releaseFilesTool(), Handler: handlers.HandleReleaseFiles},
-		server.ServerTool{Tool: listLocksTool(), Handler: handlers.HandleListLocks},
-		// Agent lifecycle
-		server.ServerTool{Tool: deactivateAgentTool(), Handler: handlers.HandleDeactivateAgent},
-		server.ServerTool{Tool: deleteAgentTool(), Handler: handlers.HandleDeleteAgent},
-		server.ServerTool{Tool: sleepAgentTool(), Handler: handlers.HandleSleepAgent},
-		// Project lifecycle
-		server.ServerTool{Tool: createProjectTool(), Handler: handlers.HandleCreateProject},
-		server.ServerTool{Tool: deleteProjectTool(), Handler: handlers.HandleDeleteProject},
-		// Soul RAG
-		server.ServerTool{Tool: queryContextTool(), Handler: handlers.HandleQueryContext},
-		// Session context
-		server.ServerTool{Tool: getSessionContextTool(), Handler: handlers.HandleGetSessionContext},
-		// Teams + Orgs
-		server.ServerTool{Tool: createOrgTool(), Handler: handlers.HandleCreateOrg},
-		server.ServerTool{Tool: listOrgsTool(), Handler: handlers.HandleListOrgs},
-		server.ServerTool{Tool: createTeamTool(), Handler: handlers.HandleCreateTeam},
-		server.ServerTool{Tool: listTeamsTool(), Handler: handlers.HandleListTeams},
-		server.ServerTool{Tool: addTeamMemberTool(), Handler: handlers.HandleAddTeamMember},
-		server.ServerTool{Tool: removeTeamMemberTool(), Handler: handlers.HandleRemoveTeamMember},
-		server.ServerTool{Tool: getTeamInboxTool(), Handler: handlers.HandleGetTeamInbox},
-		server.ServerTool{Tool: addNotifyChannelTool(), Handler: handlers.HandleAddNotifyChannel},
-		// Spawn (fork/exec)
-		server.ServerTool{Tool: spawnTool(), Handler: handlers.HandleSpawn},
-		server.ServerTool{Tool: killChildTool(), Handler: handlers.HandleKillChild},
-		server.ServerTool{Tool: listChildrenTool(), Handler: handlers.HandleListChildren},
-		// Schedule (crontab)
-		server.ServerTool{Tool: scheduleTool(), Handler: handlers.HandleSchedule},
-		server.ServerTool{Tool: unscheduleTool(), Handler: handlers.HandleUnschedule},
-		server.ServerTool{Tool: listSchedulesTool(), Handler: handlers.HandleListSchedules},
-		server.ServerTool{Tool: triggerCycleTool(), Handler: handlers.HandleTriggerCycle},
+	serverTools = append(serverTools,
+		server.ServerTool{Tool: discoverToolsTool(), Handler: handlers.HandleDiscoverTools},
+		server.ServerTool{Tool: callToolTool(), Handler: handlers.HandleCallTool},
 	)
+	mcpSrv.AddTools(serverTools...)
 
 	httpSrv := server.NewStreamableHTTPServer(
 		mcpSrv,
@@ -193,20 +93,17 @@ func New(database *db.DB, ingester *ingest.Ingester, vaultWatcher *vault.Watcher
 	)
 
 	return &Relay{
-		MCPServer:      mcpSrv,
-		HTTP:           httpSrv,
-		DB:             database,
-		Registry:       registry,
-		Ingester:       ingester,
-		VaultWatcher:   vaultWatcher,
-		Events:         events,
-		SpawnMgr:       spawnMgr,
-		PTYMgr:         ptyMgr,
-		Scheduler:      sched,
-		Handlers:       handlers,
-		WorkflowEngine: wfEngine,
-		Config:         cfg,
-		StartedAt:      time.Now().UTC(),
+		MCPServer: mcpSrv,
+		HTTP:      httpSrv,
+		DB:        database,
+		Registry:  registry,
+		Ingester:  ingester,
+		Events:    events,
+		Handlers:  handlers,
+		Notifier:  notifier,
+		taskConn:  connector.Noop{},
+		Config:    cfg,
+		StartedAt: time.Now().UTC(),
 	}
 }
 

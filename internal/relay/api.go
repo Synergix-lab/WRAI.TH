@@ -3,14 +3,13 @@ package relay
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	linearconn "agent-relay/internal/connector/linear"
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/models"
@@ -85,12 +84,18 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiStreamActivity(w, req)
 	case path == "/events/stream" && req.Method == http.MethodGet:
 		r.apiStreamEvents(w, req)
+	case path == "/events/recent" && req.Method == http.MethodGet:
+		r.apiGetRecentEvents(w, req)
 	// File locks
 	case path == "/file-locks" && req.Method == http.MethodGet:
 		r.apiGetFileLocks(w, req)
 	// Task endpoints
 	case path == "/tasks/human" && req.Method == http.MethodGet:
 		r.apiGetHumanTasks(w, req)
+	case path == "/tasks/board" && req.Method == http.MethodGet:
+		r.apiGetBoardTasks(w, req)
+	case path == "/cycles" && req.Method == http.MethodGet:
+		r.apiGetCycles(w, req)
 	case path == "/tasks/all" && req.Method == http.MethodGet:
 		r.apiGetAllTasks(w)
 	case path == "/tasks" && req.Method == http.MethodGet:
@@ -101,24 +106,17 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiDispatchTask(w, req)
 	case strings.HasPrefix(path, "/tasks/") && strings.HasSuffix(path, "/transition") && req.Method == http.MethodPost:
 		r.apiTransitionTask(w, req, path)
+	case strings.HasPrefix(path, "/tasks/") && strings.HasSuffix(path, "/progress") && req.Method == http.MethodGet:
+		r.apiGetTaskProgress(w, req, path)
 	case strings.HasPrefix(path, "/tasks/") && req.Method == http.MethodPut:
 		r.apiUpdateTask(w, req, path)
 	case strings.HasPrefix(path, "/tasks/") && req.Method == http.MethodDelete:
 		r.apiDeleteTask(w, req, path)
 	case strings.HasPrefix(path, "/tasks/") && req.Method == http.MethodGet:
 		r.apiGetTask(w, req, path)
-	// Agent management
-	case strings.HasPrefix(path, "/agents/") && req.Method == http.MethodDelete:
-		r.apiDeactivateAgent(w, req, path)
-	// Profile endpoints
+	// Profile endpoints (read-only; profiles are slimmed to identity)
 	case path == "/profiles" && req.Method == http.MethodGet:
 		r.apiGetProfiles(w, req)
-	case path == "/profiles" && req.Method == http.MethodPost:
-		r.apiCreateProfile(w, req)
-	case strings.HasPrefix(path, "/profiles/") && req.Method == http.MethodPut:
-		r.apiUpdateProfile(w, req, path)
-	case strings.HasPrefix(path, "/profiles/") && req.Method == http.MethodDelete:
-		r.apiDeleteProfile(w, req, path)
 	case strings.HasPrefix(path, "/profiles/") && req.Method == http.MethodGet:
 		r.apiGetProfile(w, req, path)
 	// Org + Team endpoints
@@ -130,37 +128,11 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiGetTeams(w, req)
 	case strings.HasPrefix(path, "/teams/") && strings.HasSuffix(path, "/members") && req.Method == http.MethodGet:
 		r.apiGetTeamMembers(w, req, path)
-	// Goal endpoints
-	case path == "/goals/all" && req.Method == http.MethodGet:
-		r.apiGetAllGoals(w)
-	case path == "/goals/cascade" && req.Method == http.MethodGet:
-		r.apiGetGoalCascade(w, req)
-	case path == "/goals" && req.Method == http.MethodGet:
-		r.apiGetGoals(w, req)
-	case path == "/goals" && req.Method == http.MethodPost:
-		r.apiCreateGoal(w, req)
-	case strings.HasPrefix(path, "/goals/") && req.Method == http.MethodPut:
-		r.apiUpdateGoal(w, req, path)
-	case strings.HasPrefix(path, "/goals/") && req.Method == http.MethodGet:
-		r.apiGetGoal(w, req, path)
 	// Board endpoints
 	case path == "/boards" && req.Method == http.MethodGet:
 		r.apiGetBoards(w, req)
 	case path == "/boards/all" && req.Method == http.MethodGet:
 		r.apiGetAllBoards(w)
-	// Vault endpoints
-	case path == "/vault/search" && req.Method == http.MethodGet:
-		r.apiSearchVault(w, req)
-	case path == "/vault/docs/all" && req.Method == http.MethodGet:
-		r.apiListAllVaultDocs(w)
-	case path == "/vault/docs" && req.Method == http.MethodGet:
-		r.apiListVaultDocs(w, req)
-	case strings.HasPrefix(path, "/vault/doc/") && req.Method == http.MethodGet:
-		r.apiGetVaultDoc(w, req, path)
-	case strings.HasPrefix(path, "/vault/doc/") && req.Method == http.MethodPut:
-		r.apiUpdateVaultDoc(w, req, path)
-	case path == "/vault/stats" && req.Method == http.MethodGet:
-		r.apiGetVaultStats(w, req)
 	// Token usage
 	case path == "/token-usage" && req.Method == http.MethodGet:
 		r.apiGetTokenUsage(w, req)
@@ -170,127 +142,31 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiGetTokenUsageByAgent(w, req)
 	case path == "/token-usage/timeseries" && req.Method == http.MethodGet:
 		r.apiGetTokenTimeSeries(w, req)
-	// Spawn endpoints
-	case path == "/spawn/children" && req.Method == http.MethodGet:
-		r.apiGetSpawnChildren(w, req)
-	case path == "/spawn/children" && req.Method == http.MethodPost:
-		r.apiSpawnChild(w, req)
-	case strings.HasPrefix(path, "/spawn/children/") && strings.HasSuffix(path, "/kill") && req.Method == http.MethodPost:
-		r.apiKillSpawnChild(w, path)
-	case strings.HasPrefix(path, "/spawn/children/") && req.Method == http.MethodGet:
-		r.apiGetSpawnChild(w, path)
-	// Terminal (PTY) endpoints
-	case path == "/terminal/spawn" && req.Method == http.MethodPost:
-		r.apiTerminalSpawn(w, req)
-	case strings.HasPrefix(path, "/terminal/ws/") && req.Method == http.MethodGet:
-		r.apiTerminalWS(w, req, path)
-	case strings.HasPrefix(path, "/terminal/") && strings.HasSuffix(path, "/kill") && req.Method == http.MethodPost:
-		r.apiTerminalKill(w, path)
-	// Schedule endpoints
-	case path == "/schedules" && req.Method == http.MethodGet:
-		r.apiGetSchedules(w, req)
-	case path == "/schedules" && req.Method == http.MethodPost:
-		r.apiCreateSchedule(w, req)
-	case strings.HasPrefix(path, "/schedules/") && strings.HasSuffix(path, "/trigger") && req.Method == http.MethodPost:
-		r.apiTriggerSchedule(w, path)
-	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodPut:
-		r.apiUpdateSchedule(w, req, path)
-	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodGet:
-		r.apiGetSchedule(w, path)
-	case strings.HasPrefix(path, "/schedules/") && req.Method == http.MethodDelete:
-		r.apiDeleteSchedule(w, path)
-	// Cycle history
-	case path == "/cycle-history" && req.Method == http.MethodGet:
-		r.apiGetCycleHistory(w, req)
-	// Triggers (event-driven spawn rules)
-	case path == "/triggers" && req.Method == http.MethodGet:
-		r.apiGetTriggers(w, req)
-	case path == "/triggers" && req.Method == http.MethodPost:
-		r.apiCreateTrigger(w, req)
-	case strings.HasPrefix(path, "/triggers/") && req.Method == http.MethodDelete:
-		r.apiDeleteTrigger(w, path)
-	// Agent OS spawn (profile + cycle)
-	case path == "/spawn/context" && req.Method == http.MethodPost:
-		r.apiSpawnWithContext(w, req)
-	// Trigger history + webhooks + signal handlers
-	case path == "/trigger-history" && req.Method == http.MethodGet:
-		r.apiGetTriggerHistory(w, req)
-	case strings.HasPrefix(path, "/webhooks/") && req.Method == http.MethodPost:
-		r.apiWebhook(w, req, path)
-	case path == "/signal-handlers" && req.Method == http.MethodPost:
-		r.apiCreateSignalHandler(w, req)
-	// Poll triggers (external URL monitoring)
-	case path == "/poll-triggers" && req.Method == http.MethodGet:
-		r.apiGetPollTriggers(w, req)
-	case path == "/poll-triggers" && req.Method == http.MethodPost:
-		r.apiCreatePollTrigger(w, req)
-	case strings.HasPrefix(path, "/poll-triggers/") && strings.HasSuffix(path, "/test") && req.Method == http.MethodPost:
-		r.apiTestPollTrigger(w, path)
-	case strings.HasPrefix(path, "/poll-triggers/") && req.Method == http.MethodDelete:
-		r.apiDeletePollTrigger(w, path)
-	// Skill registry
-	case path == "/skills" && req.Method == http.MethodGet:
-		r.apiGetSkills(w, req)
-	case path == "/skills" && req.Method == http.MethodPost:
-		r.apiCreateSkill(w, req)
-	case strings.HasPrefix(path, "/skills/") && strings.HasSuffix(path, "/profiles") && req.Method == http.MethodGet:
-		r.apiGetSkillProfiles(w, req, path)
-	case strings.HasPrefix(path, "/skills/") && req.Method == http.MethodDelete:
-		r.apiDeleteSkill(w, req, path)
-	// Service discovery
-	case path == "/discover" && req.Method == http.MethodGet:
-		r.apiDiscover(w, req)
-	// Per-agent quotas
-	case path == "/quotas" && req.Method == http.MethodGet:
-		r.apiGetQuotas(w, req)
-	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodGet:
-		r.apiGetAgentQuota(w, req, path)
-	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodPut:
-		r.apiSetAgentQuota(w, req, path)
-	case strings.HasPrefix(path, "/quotas/") && req.Method == http.MethodDelete:
-		r.apiDeleteQuota(w, req, path)
-	// Cycles CRUD
-	case path == "/cycles" && req.Method == http.MethodGet:
-		r.apiGetCycles(w, req)
-	case path == "/cycles" && req.Method == http.MethodPost:
-		r.apiCreateCycle(w, req)
-	case strings.HasPrefix(path, "/cycles/") && req.Method == http.MethodGet:
-		r.apiGetCycle(w, req, path)
-	case strings.HasPrefix(path, "/cycles/") && req.Method == http.MethodPut:
-		r.apiUpdateCycle(w, req, path)
-	case strings.HasPrefix(path, "/cycles/") && req.Method == http.MethodDelete:
-		r.apiDeleteCycle(w, req, path)
-	// Privilege escalation
-	case path == "/elevations" && req.Method == http.MethodGet:
-		r.apiGetElevations(w, req)
-	case path == "/elevations" && req.Method == http.MethodPost:
-		r.apiGrantElevation(w, req)
-	case strings.HasPrefix(path, "/elevations/") && req.Method == http.MethodDelete:
-		r.apiRevokeElevation(w, path)
-	// Custom events (user-defined event types)
-	case path == "/custom-events" && req.Method == http.MethodGet:
-		r.apiGetCustomEvents(w, req)
-	case path == "/custom-events" && req.Method == http.MethodPost:
-		r.apiCreateCustomEvent(w, req)
-	case strings.HasPrefix(path, "/custom-events/") && req.Method == http.MethodDelete:
-		r.apiDeleteCustomEvent(w, path)
-	// Workflow endpoints
-	case path == "/workflows" && req.Method == http.MethodGet:
-		r.apiGetWorkflows(w, req)
-	case path == "/workflows" && req.Method == http.MethodPost:
-		r.apiCreateWorkflow(w, req)
-	case strings.HasPrefix(path, "/workflows/") && strings.HasSuffix(path, "/execute") && req.Method == http.MethodPost:
-		r.apiExecuteWorkflow(w, req, path)
-	case strings.HasPrefix(path, "/workflows/") && strings.HasSuffix(path, "/runs") && req.Method == http.MethodGet:
-		r.apiGetWorkflowRuns(w, req, path)
-	case strings.HasPrefix(path, "/workflows/") && req.Method == http.MethodPut:
-		r.apiUpdateWorkflow(w, req, path)
-	case strings.HasPrefix(path, "/workflows/") && req.Method == http.MethodDelete:
-		r.apiDeleteWorkflow(w, path)
-	case strings.HasPrefix(path, "/workflows/") && req.Method == http.MethodGet:
-		r.apiGetWorkflow(w, path)
-	case strings.HasPrefix(path, "/workflow-runs/") && req.Method == http.MethodGet:
-		r.apiGetWorkflowRunDetail(w, path)
+	// Agentic analytics (stats panel)
+	case path == "/stats" && req.Method == http.MethodGet:
+		r.apiGetAgentStats(w, req)
+	// Notification rules (configurable event→action→target rules engine)
+	case path == "/notification-rules" && req.Method == http.MethodGet:
+		r.apiGetNotificationRules(w, req)
+	case path == "/notification-rules" && req.Method == http.MethodPost:
+		r.apiCreateNotificationRule(w, req)
+	case strings.HasPrefix(path, "/notification-rules/") && strings.HasSuffix(path, "/test-fire") && req.Method == http.MethodPost:
+		r.apiTestFireNotificationRule(w, req, path)
+	case strings.HasPrefix(path, "/notification-rules/") && req.Method == http.MethodPatch:
+		r.apiPatchNotificationRule(w, req, path)
+	case strings.HasPrefix(path, "/notification-rules/") && req.Method == http.MethodDelete:
+		r.apiDeleteNotificationRule(w, path)
+	case path == "/notification-deliveries" && req.Method == http.MethodGet:
+		r.apiGetNotificationDeliveries(w, req)
+	case path == "/notification-events" && req.Method == http.MethodPost:
+		r.apiEmitNotificationEvent(w, req)
+	// Linear connector inbound webhook (404s unless the connector is active).
+	case path == "/connectors/linear/webhook" && req.Method == http.MethodPost:
+		r.apiLinearWebhook(w, req)
+	case path == "/linear/teams" && req.Method == http.MethodGet:
+		r.apiLinearTeams(w, req)
+	case path == "/agents/avatar" && req.Method == http.MethodPut:
+		r.apiSetAgentAvatar(w, req)
 	default:
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 	}
@@ -319,13 +195,34 @@ func (r *Relay) apiGetProjects(w http.ResponseWriter) {
 
 func (r *Relay) apiHealth(w http.ResponseWriter) {
 	stats := r.DB.GetHealthStats()
-	writeJSON(w, map[string]any{
-		"status":  "ok",
-		"version": "0.5.0",
-		"uptime":  time.Since(r.StartedAt).String(),
-		"started": r.StartedAt.Format(time.RFC3339),
-		"db":      stats,
-	})
+	v := r.Version
+	if v == "" {
+		v = "dev"
+	}
+	health := map[string]any{
+		"status":      "ok",
+		"version":     v,
+		"uptime":      time.Since(r.StartedAt).String(),
+		"started":     r.StartedAt.Format(time.RFC3339),
+		"db":          stats,
+		"linear_mode": r.Config.LinearMode,
+		"mode":        modeString(r.Config.LinearMode),
+	}
+	// When the Linear connector is active, surface its live status
+	// (last_webhook_at, last_reconcile_at, writer failure count, cache state).
+	if lc := r.LinearConnector(); lc != nil {
+		health["linear_connector"] = lc.Status()
+	}
+	writeJSON(w, health)
+}
+
+// modeString maps the linear_mode flag to a human-readable mode label the web
+// UI uses to switch behavior (writable native board vs. read-replica mirror).
+func modeString(linear bool) string {
+	if linear {
+		return "linear"
+	}
+	return "native"
 }
 
 func (r *Relay) apiGetProject(w http.ResponseWriter, name string) {
@@ -377,7 +274,27 @@ func (r *Relay) apiGetSettings(w http.ResponseWriter) {
 	if sunType == "" {
 		sunType = "1"
 	}
-	writeJSON(w, map[string]string{"sun_type": sunType})
+	apiKey, teamKey, enabled, interval, source := r.effectiveLinearConfig()
+	masked := ""
+	if apiKey != "" {
+		masked = "set"
+		if len(apiKey) > 8 {
+			masked = "…" + apiKey[len(apiKey)-4:]
+		}
+	}
+	writeJSON(w, map[string]any{
+		"sun_type":    sunType,
+		"linear_mode": enabled,
+		"mode":        modeString(enabled),
+		"linear": map[string]any{
+			"enabled":        enabled,
+			"team_key":       teamKey,
+			"project":        r.linearProjectName(teamKey, enabled),
+			"api_key_masked": masked,
+			"interval":       interval.String(),
+			"source":         source,
+		},
+	})
 }
 
 func (r *Relay) apiPutSetting(w http.ResponseWriter, req *http.Request) {
@@ -386,10 +303,37 @@ func (r *Relay) apiPutSetting(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
+	linearChanged := false
 	for k, v := range body {
 		r.DB.SetSetting(k, v)
+		if strings.HasPrefix(k, "linear_") {
+			linearChanged = true
+		}
+	}
+	if linearChanged {
+		// Hot-reload the connector — no restart needed.
+		r.ReconfigureLinear()
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
+}
+
+// apiLinearTeams lists the Linear workspace teams using the effective API key
+// (or one passed as ?key= for pre-save validation in the settings UI).
+func (r *Relay) apiLinearTeams(w http.ResponseWriter, req *http.Request) {
+	apiKey, _, _, _, _ := r.effectiveLinearConfig()
+	if k := strings.TrimSpace(req.URL.Query().Get("key")); k != "" {
+		apiKey = k
+	}
+	if apiKey == "" {
+		http.Error(w, `{"error":"no linear api key configured"}`, http.StatusBadRequest)
+		return
+	}
+	teams, err := linearconn.ListTeams(req.Context(), apiKey)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "linear teams fetch failed", err)
+		return
+	}
+	writeJSON(w, teams)
 }
 
 type apiTeamRef struct {
@@ -412,6 +356,7 @@ type apiAgent struct {
 	Status       string       `json:"status"`
 	IsExecutive  bool         `json:"is_executive"`
 	SessionID    *string      `json:"session_id,omitempty"`
+	AvatarURL    *string      `json:"avatar_url,omitempty"`
 	Activity     string       `json:"activity,omitempty"`
 	ActivityTool string       `json:"activity_tool,omitempty"`
 	Teams        []apiTeamRef `json:"teams,omitempty"`
@@ -456,6 +401,7 @@ func (r *Relay) apiGetAgents(w http.ResponseWriter, req *http.Request) {
 			Status:       a.Status,
 			IsExecutive:  a.IsExecutive,
 			SessionID:    a.SessionID,
+			AvatarURL:    a.AvatarURL,
 			Teams:        teamsByAgent[key],
 		}
 		online := false
@@ -526,6 +472,7 @@ func (r *Relay) apiGetAllAgents(w http.ResponseWriter) {
 			Status:       a.Status,
 			IsExecutive:  a.IsExecutive,
 			SessionID:    a.SessionID,
+			AvatarURL:    a.AvatarURL,
 			Teams:        teamsByAgent[a.Project+":"+a.Name],
 		}
 		if a.SessionID != nil {
@@ -906,6 +853,32 @@ func (r *Relay) apiGetActivity(w http.ResponseWriter) {
 	writeJSON(w, sessions)
 }
 
+// apiGetRecentEvents returns recent MCP events from the in-memory ring buffer.
+// Complements /api/activity (which tracks Claude Code session states) with an
+// event log of MCP actions (send_message, dispatch_task, etc.) regardless of
+// whether the caller went through a Claude Code session.
+//
+// Query params:
+//   - project: filter by project (optional)
+//   - limit: max entries (default 100, max 500)
+func (r *Relay) apiGetRecentEvents(w http.ResponseWriter, req *http.Request) {
+	project := req.URL.Query().Get("project")
+	limit := 100
+	if v := req.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	events := r.Events.Recent(project, limit)
+	if events == nil {
+		events = []MCPEvent{}
+	}
+	writeJSON(w, events)
+}
+
 type ssePayload struct {
 	Sessions []ingest.SessionState `json:"sessions"`
 	Agents   []sseAgent            `json:"agents"`
@@ -1087,6 +1060,56 @@ func (r *Relay) apiGetHumanTasks(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, tasks)
 }
 
+// apiGetBoardTasks serves the kanban board: every non-archived, non-cancelled
+// task for a project (or a single cycle), flat, ordered priority → points →
+// dispatched_at. The board nests by parent_task_id and maps linear_state →
+// columns client-side. Single call, zero Linear round-trips (reads the mirror).
+//
+// Params: ?project= (default "default"), ?cycle= (cycle_id | "all" | "active" | "").
+// "active" resolves to the cycle spanning today; empty/"all" returns everything.
+func (r *Relay) apiGetBoardTasks(w http.ResponseWriter, req *http.Request) {
+	project := projectFromRequest(req)
+	cycle := req.URL.Query().Get("cycle")
+
+	if cycle == "active" {
+		cycle = "" // default; resolve below if an active cycle exists
+		if cycles, err := r.DB.ListCycles(project); err == nil {
+			for _, c := range cycles {
+				if c.Active {
+					cycle = c.ID
+					break
+				}
+			}
+		}
+	}
+
+	tasks, err := r.DB.ListBoardTasks(project, cycle, 1000)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "failed to list board tasks", err)
+		return
+	}
+	if tasks == nil {
+		tasks = []models.Task{}
+	}
+	writeJSON(w, tasks)
+}
+
+// apiGetCycles serves the kanban cycle filter: the distinct Linear cycles in the
+// mirror for a project, with the active one (spanning today) flagged. Empty in
+// native mode.
+func (r *Relay) apiGetCycles(w http.ResponseWriter, req *http.Request) {
+	project := projectFromRequest(req)
+	cycles, err := r.DB.ListCycles(project)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "failed to list cycles", err)
+		return
+	}
+	if cycles == nil {
+		cycles = []db.Cycle{}
+	}
+	writeJSON(w, cycles)
+}
+
 func (r *Relay) apiGetAllTasks(w http.ResponseWriter) {
 	tasks, err := r.DB.ListAllTasks(200)
 	if err != nil {
@@ -1103,7 +1126,9 @@ func (r *Relay) apiGetLatestTasks(w http.ResponseWriter, req *http.Request) {
 	project := req.URL.Query().Get("project")
 	since := req.URL.Query().Get("since")
 	if since == "" {
-		since = time.Now().UTC().Add(-30 * time.Second).Format("2006-01-02T15:04:05.000000Z")
+		// Default window is 1h — 30s was too narrow for human polling cycles,
+		// so the endpoint appeared empty even when tasks existed.
+		since = time.Now().UTC().Add(-1 * time.Hour).Format("2006-01-02T15:04:05.000000Z")
 	}
 
 	tasks, err := r.DB.GetTasksSince(project, since, 100)
@@ -1137,6 +1162,25 @@ func (r *Relay) apiGetTask(w http.ResponseWriter, req *http.Request, path string
 	writeJSON(w, task)
 }
 
+func (r *Relay) apiGetTaskProgress(w http.ResponseWriter, req *http.Request, path string) {
+	project := projectFromRequest(req)
+	trimmed := strings.TrimPrefix(path, "/tasks/")
+	taskID, _, _ := strings.Cut(trimmed, "/")
+	if taskID == "" {
+		http.Error(w, `{"error":"missing task id"}`, http.StatusBadRequest)
+		return
+	}
+	notes, err := r.DB.GetProgressNotes(taskID, project)
+	if err != nil {
+		http.Error(w, `{"error":"failed to get progress notes"}`, http.StatusInternalServerError)
+		return
+	}
+	if notes == nil {
+		notes = []db.ProgressNote{}
+	}
+	writeJSON(w, notes)
+}
+
 func (r *Relay) apiDispatchTask(w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		Project      string  `json:"project"`
@@ -1146,7 +1190,6 @@ func (r *Relay) apiDispatchTask(w http.ResponseWriter, req *http.Request) {
 		Priority     string  `json:"priority"`
 		ParentTaskID *string `json:"parent_task_id,omitempty"`
 		BoardID      *string `json:"board_id,omitempty"`
-		GoalID       *string `json:"goal_id,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
@@ -1160,7 +1203,7 @@ func (r *Relay) apiDispatchTask(w http.ResponseWriter, req *http.Request) {
 		body.Project = "default"
 	}
 
-	task, err := r.DB.DispatchTask(body.Project, body.Profile, "user", body.Title, body.Description, body.Priority, body.ParentTaskID, body.BoardID, body.GoalID)
+	task, err := r.DB.DispatchTask(body.Project, body.Profile, "user", body.Title, body.Description, body.Priority, body.ParentTaskID, body.BoardID)
 	if err != nil {
 		apiError(w, http.StatusInternalServerError, "failed to dispatch task", err)
 		return
@@ -1208,6 +1251,8 @@ func (r *Relay) apiTransitionTask(w http.ResponseWriter, req *http.Request, path
 		task, err = r.DB.ClaimTask(taskID, body.Agent, body.Project)
 	case "in-progress":
 		task, err = r.DB.StartTask(taskID, body.Agent, body.Project)
+	case "in-review":
+		task, err = r.DB.ReviewTask(taskID, body.Agent, body.Project)
 	case "done":
 		task, err = r.DB.CompleteTask(taskID, body.Agent, body.Project, body.Result)
 	case "blocked":
@@ -1222,7 +1267,41 @@ func (r *Relay) apiTransitionTask(w http.ResponseWriter, req *http.Request, path
 		apiError(w, http.StatusBadRequest, "task transition failed", err)
 		return
 	}
+
+	// Emit the matching semantic event so notification rules fire for web-UI
+	// driven transitions too (the MCP handlers emit their own).
+	if evType, line := semanticForStatus(body.Status, task.Title); evType != "" {
+		payload := taskSemantic(task, line)
+		if body.Status == "blocked" && body.Reason != nil {
+			payload["reason"] = *body.Reason
+		}
+		r.Events.EmitSemantic(evType, body.Project, body.Agent, payload)
+	}
+
+	// Write-back (Linear mode): a web-driven → In Review fires the one owned
+	// transition + comment, fire-and-forget. No-op in native mode.
+	if body.Status == "in-review" {
+		pushInReviewAsync(r.TaskConn(), task, body.Agent, body.Result)
+	}
+
 	writeJSON(w, task)
+}
+
+// semanticForStatus maps a kanban status to its semantic event type + line.
+func semanticForStatus(status, title string) (string, string) {
+	switch status {
+	case "accepted":
+		return EvTaskClaimed, "Claimed: " + title
+	case "in-progress":
+		return EvTaskInProgress, "In progress: " + title
+	case "in-review":
+		return EvTaskInReview, "In review: " + title
+	case "done":
+		return EvTaskDone, "Done: " + title
+	case "blocked":
+		return EvTaskBlocked, "Blocked: " + title
+	}
+	return "", ""
 }
 
 func (r *Relay) apiUpdateTask(w http.ResponseWriter, req *http.Request, path string) {
@@ -1239,7 +1318,6 @@ func (r *Relay) apiUpdateTask(w http.ResponseWriter, req *http.Request, path str
 		Description *string `json:"description,omitempty"`
 		Priority    *string `json:"priority,omitempty"`
 		BoardID     *string `json:"board_id,omitempty"`
-		GoalID      *string `json:"goal_id,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
@@ -1249,7 +1327,7 @@ func (r *Relay) apiUpdateTask(w http.ResponseWriter, req *http.Request, path str
 		body.Project = "default"
 	}
 
-	task, err := r.DB.UpdateTaskFields(taskID, body.Project, body.Title, body.Description, body.Priority, body.BoardID, body.GoalID)
+	task, err := r.DB.UpdateTaskFields(taskID, body.Project, body.Title, body.Description, body.Priority, body.BoardID)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, "failed to update task", err)
 		return
@@ -1394,127 +1472,6 @@ func (r *Relay) apiGetProfile(w http.ResponseWriter, req *http.Request, path str
 	writeJSON(w, profile)
 }
 
-// --- Goal API endpoints ---
-
-func (r *Relay) apiGetAllGoals(w http.ResponseWriter) {
-	goals, err := r.DB.ListAllGoals(200)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list goals"}`, http.StatusInternalServerError)
-		return
-	}
-	if goals == nil {
-		goals = []models.Goal{}
-	}
-	writeJSON(w, goals)
-}
-
-func (r *Relay) apiGetGoals(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	goalType := req.URL.Query().Get("type")
-	status := req.URL.Query().Get("status")
-
-	goals, err := r.DB.ListGoals(project, goalType, status, nil, 100)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list goals"}`, http.StatusInternalServerError)
-		return
-	}
-	if goals == nil {
-		goals = []models.Goal{}
-	}
-	writeJSON(w, goals)
-}
-
-func (r *Relay) apiGetGoalCascade(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	cascade, err := r.DB.GetGoalCascade(project)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get goal cascade"}`, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, cascade)
-}
-
-func (r *Relay) apiCreateGoal(w http.ResponseWriter, req *http.Request) {
-	var body struct {
-		Project      string  `json:"project"`
-		Type         string  `json:"type"`
-		Title        string  `json:"title"`
-		Description  string  `json:"description"`
-		OwnerAgent   *string `json:"owner_agent,omitempty"`
-		ParentGoalID *string `json:"parent_goal_id,omitempty"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Title == "" {
-		http.Error(w, `{"error":"title is required"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Project == "" {
-		body.Project = "default"
-	}
-	if body.Type == "" {
-		body.Type = "agent_goal"
-	}
-
-	goal, err := r.DB.CreateGoal(body.Project, body.Type, body.Title, body.Description, "user", body.OwnerAgent, body.ParentGoalID)
-	if err != nil {
-		apiError(w, http.StatusInternalServerError, "failed to create goal", err)
-		return
-	}
-	writeJSON(w, goal)
-}
-
-func (r *Relay) apiUpdateGoal(w http.ResponseWriter, req *http.Request, path string) {
-	goalID := strings.TrimPrefix(path, "/goals/")
-	if goalID == "" {
-		http.Error(w, `{"error":"missing goal id"}`, http.StatusBadRequest)
-		return
-	}
-
-	var body struct {
-		Project     string  `json:"project"`
-		Title       *string `json:"title,omitempty"`
-		Description *string `json:"description,omitempty"`
-		Status      *string `json:"status,omitempty"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Project == "" {
-		body.Project = "default"
-	}
-
-	goal, err := r.DB.UpdateGoal(goalID, body.Project, body.Title, body.Description, body.Status)
-	if err != nil {
-		apiError(w, http.StatusBadRequest, "failed to update goal", err)
-		return
-	}
-	writeJSON(w, goal)
-}
-
-func (r *Relay) apiGetGoal(w http.ResponseWriter, req *http.Request, path string) {
-	project := projectFromRequest(req)
-	goalID := strings.TrimPrefix(path, "/goals/")
-	if goalID == "" {
-		http.Error(w, `{"error":"missing goal id"}`, http.StatusBadRequest)
-		return
-	}
-
-	gwp, err := r.DB.GetGoalWithProgress(goalID, project)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get goal"}`, http.StatusInternalServerError)
-		return
-	}
-	if gwp == nil {
-		http.Error(w, `{"error":"goal not found"}`, http.StatusNotFound)
-		return
-	}
-	writeJSON(w, gwp)
-}
-
 func (r *Relay) apiGetBoards(w http.ResponseWriter, req *http.Request) {
 	project := projectFromRequest(req)
 	boards, err := r.DB.ListBoards(project)
@@ -1538,197 +1495,6 @@ func (r *Relay) apiGetAllBoards(w http.ResponseWriter) {
 		boards = []models.Board{}
 	}
 	writeJSON(w, boards)
-}
-
-// --- Vault API endpoints ---
-
-func (r *Relay) apiSearchVault(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	query := req.URL.Query().Get("q")
-	if query == "" {
-		http.Error(w, `{"error":"q parameter is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	var tags []string
-	if t := req.URL.Query().Get("tags"); t != "" {
-		_ = json.Unmarshal([]byte(t), &tags)
-	}
-
-	results, err := r.DB.SearchVault(project, query, tags, 20)
-	if err != nil {
-		http.Error(w, `{"error":"search failed"}`, http.StatusInternalServerError)
-		return
-	}
-	if results == nil {
-		results = []models.VaultSearchResult{}
-	}
-	writeJSON(w, map[string]any{"query": query, "count": len(results), "results": results})
-}
-
-func (r *Relay) apiListAllVaultDocs(w http.ResponseWriter) {
-	docs, err := r.DB.ListAllVaultDocs(500)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list vault docs"}`, http.StatusInternalServerError)
-		return
-	}
-
-	type docMeta struct {
-		Path      string `json:"path"`
-		Project   string `json:"project"`
-		Title     string `json:"title"`
-		Owner     string `json:"owner"`
-		Tags      string `json:"tags"`
-		SizeBytes int    `json:"size_bytes"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	metas := make([]docMeta, 0, len(docs))
-	for _, d := range docs {
-		metas = append(metas, docMeta{
-			Path: d.Path, Project: d.Project, Title: d.Title, Owner: d.Owner,
-			Tags: d.Tags, SizeBytes: d.SizeBytes, UpdatedAt: d.UpdatedAt,
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metas)
-}
-
-func (r *Relay) apiListVaultDocs(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-
-	var tags []string
-	if t := req.URL.Query().Get("tags"); t != "" {
-		_ = json.Unmarshal([]byte(t), &tags)
-	}
-
-	docs, err := r.DB.ListVaultDocs(project, tags, 200)
-	if err != nil {
-		http.Error(w, `{"error":"failed to list vault docs"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// Return metadata only
-	type docMeta struct {
-		Path      string `json:"path"`
-		Project   string `json:"project"`
-		Title     string `json:"title"`
-		Owner     string `json:"owner"`
-		Tags      string `json:"tags"`
-		SizeBytes int    `json:"size_bytes"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	metas := make([]docMeta, 0, len(docs))
-	for _, d := range docs {
-		metas = append(metas, docMeta{
-			Path: d.Path, Project: d.Project, Title: d.Title, Owner: d.Owner,
-			Tags: d.Tags, SizeBytes: d.SizeBytes, UpdatedAt: d.UpdatedAt,
-		})
-	}
-	writeJSON(w, metas)
-}
-
-func (r *Relay) apiGetVaultDoc(w http.ResponseWriter, req *http.Request, path string) {
-	project := projectFromRequest(req)
-	docPath := strings.TrimPrefix(path, "/vault/doc/")
-	if docPath == "" {
-		http.Error(w, `{"error":"missing doc path"}`, http.StatusBadRequest)
-		return
-	}
-
-	doc, err := r.DB.GetVaultDoc(project, docPath)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get vault doc"}`, http.StatusInternalServerError)
-		return
-	}
-	if doc == nil {
-		http.Error(w, `{"error":"vault doc not found"}`, http.StatusNotFound)
-		return
-	}
-	writeJSON(w, doc)
-}
-
-func (r *Relay) apiUpdateVaultDoc(w http.ResponseWriter, req *http.Request, path string) {
-	project := projectFromRequest(req)
-	docPath := strings.TrimPrefix(path, "/vault/doc/")
-	if docPath == "" {
-		http.Error(w, `{"error":"missing doc path"}`, http.StatusBadRequest)
-		return
-	}
-
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
-		return
-	}
-	defer func() { _ = req.Body.Close() }()
-
-	var payload struct {
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Write to disk if vault config exists
-	cfg, err := r.DB.GetVaultConfig(project)
-	if err != nil || cfg == nil {
-		http.Error(w, `{"error":"no vault configured for project"}`, http.StatusBadRequest)
-		return
-	}
-
-	absPath := filepath.Join(cfg.Path, docPath)
-	// Read existing file to preserve frontmatter
-	existing, _ := os.ReadFile(absPath)
-	var newContent string
-	if fm := extractFrontmatter(string(existing)); fm != "" {
-		newContent = fm + "\n" + payload.Content
-	} else {
-		newContent = payload.Content
-	}
-
-	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-		apiError(w, http.StatusInternalServerError, "failed to write vault file", err)
-		return
-	}
-
-	// The fsnotify watcher will re-index automatically, but update DB now for immediate feedback
-	doc, _ := r.DB.GetVaultDoc(project, docPath)
-	if doc != nil {
-		doc.Content = payload.Content
-		doc.SizeBytes = len(newContent)
-		doc.UpdatedAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
-		_ = r.DB.UpsertVaultDoc(doc)
-	}
-
-	writeJSON(w, map[string]any{"ok": true})
-}
-
-// extractFrontmatter returns the raw frontmatter block (including delimiters) or empty string.
-func extractFrontmatter(content string) string {
-	if !strings.HasPrefix(content, "---\n") {
-		return ""
-	}
-	end := strings.Index(content[4:], "\n---")
-	if end < 0 {
-		return ""
-	}
-	return content[:end+4+4] // include closing ---
-}
-
-func (r *Relay) apiGetVaultStats(w http.ResponseWriter, req *http.Request) {
-	project := projectFromRequest(req)
-	count, totalSize, err := r.DB.GetVaultStats(project)
-	if err != nil {
-		http.Error(w, `{"error":"failed to get vault stats"}`, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{
-		"project":     project,
-		"doc_count":   count,
-		"total_bytes": totalSize,
-	})
 }
 
 func (r *Relay) apiGetFileLocks(w http.ResponseWriter, req *http.Request) {
@@ -1818,4 +1584,30 @@ func (r *Relay) apiGetTokenTimeSeries(w http.ResponseWriter, req *http.Request) 
 		data = []db.TokenTimeBucket{}
 	}
 	writeJSON(w, data)
+}
+
+// apiSetAgentAvatar sets or clears an agent's avatar image URL (photo/gif).
+func (r *Relay) apiSetAgentAvatar(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		Project string `json:"project"`
+		Name    string `json:"name"`
+		URL     string `json:"url"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Name == "" {
+		http.Error(w, `{"error":"name required"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Project == "" {
+		body.Project = "default"
+	}
+	u := strings.TrimSpace(body.URL)
+	if u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "data:image/") {
+		http.Error(w, `{"error":"url must be http(s) or data:image"}`, http.StatusBadRequest)
+		return
+	}
+	if err := r.DB.SetAgentAvatar(body.Project, body.Name, u); err != nil {
+		apiError(w, http.StatusInternalServerError, "failed to set avatar", err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "agent": body.Name, "avatar_url": u})
 }

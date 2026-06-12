@@ -134,6 +134,12 @@ Thresholds: 1.5s min display, 10s → waiting, 30s → idle, 5min → exited.
 
 Link session to agent: pass `session_id` from `whoami` in `register_agent`.
 
+## Token Efficiency
+
+- **Worker agents should connect with `?tools=discovery`** (`http://localhost:8090/mcp?tools=discovery`): only 2 tools are exposed (~460 tokens of schemas instead of ~11,000). Call `discover_tools(category)` to fetch one category's schemas, then `call_tool(tool: "send_message", args: {...})` to invoke. Categories: session, messaging, conversations, tasks, boards, goals, memory, profiles, agents, teams, locks, projects.
+- **`get_inbox`, `list_tasks`, `list_agents`, `list_memories`, `list_goals` return compact markdown tables by default** (~half the tokens of JSON). Pass `format: "json"` when you need the structured shape.
+- Default connection (no `?tools=`) keeps full schemas for compatibility.
+
 ## Data Conventions
 
 **Agent names are case-insensitive.** The relay lowercases all agent names on ingestion. `Bot-A`, `bot-a`, and `BOT-A` all resolve to `bot-a`.
@@ -153,4 +159,4 @@ The relay auto-normalizes JSON keys to snake_case on ingestion, but agents shoul
 
 ## Reference
 
-See `skill/tools-reference.md` for the full 67 MCP tools list.
+See `skill/tools-reference.md` for the full 65 MCP tools list.

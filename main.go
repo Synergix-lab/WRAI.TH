@@ -4,19 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"agent-relay/docs"
 	"agent-relay/internal/cli"
 	"agent-relay/internal/config"
 	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 	"agent-relay/internal/relay"
-	"agent-relay/internal/spawn"
-	"agent-relay/internal/vault"
 )
 
 var Version = "dev"
@@ -33,7 +29,7 @@ func main() {
 		case "serve":
 			startServer()
 			return
-		case "init", "update", "status", "agents", "inbox", "send", "thread", "stats", "conversations", "memories", "children", "schedules", "history":
+		case "init", "update", "status", "agents", "inbox", "send", "thread", "stats", "conversations", "memories":
 			cli.Run(os.Args[1:])
 			return
 		default:
@@ -51,6 +47,7 @@ func startServer() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	cfg := config.Load()
+	cfg.Version = Version
 
 	database, err := db.New()
 	if err != nil {
@@ -68,20 +65,8 @@ func startServer() {
 	}
 	defer ingester.Stop()
 
-	// Start vault watcher (loads configs from DB)
-	vaultWatcher := vault.New(database)
-	vaultWatcher.IndexEmbedded(docs.Files)
-	vaultWatcher.Start()
-	defer vaultWatcher.Stop()
-
-	r := relay.New(database, ingester, vaultWatcher, cfg)
-
-	// Start scheduler and load persisted schedules
-	if r.SpawnMgr != nil {
-		r.Scheduler.Start()
-		r.SpawnMgr.LoadSchedulesFromDB()
-		defer r.Scheduler.Stop()
-	}
+	r := relay.New(database, ingester, cfg)
+	r.Version = Version
 
 	addr := ":8090"
 	if v := os.Getenv("PORT"); v != "" {
@@ -96,13 +81,14 @@ func startServer() {
 	relay.StartCleanup(database, cleanupDone)
 	relay.StartACKChecker(database, r.Registry, cleanupDone)
 
-	// Start ghost reaper for spawn crash detection
-	if r.SpawnMgr != nil {
-		spawn.StartReaper(database, r.SpawnMgr, cleanupDone, slog.Default())
+	// Start notifications subsystem (rules evaluator + digest scheduler)
+	if r.Notifier != nil {
+		r.Notifier.Start(cleanupDone)
 	}
 
-	// Start poll trigger background worker
-	r.Handlers.StartPoller(cleanupDone)
+	// Wire the Linear connector from effective config (env or settings table).
+	// Inert when unconfigured; hot-reloaded on settings changes without restart.
+	r.ReconfigureLinear()
 
 	// Log ingested events (phase 1: log only, phase 2: TouchAgent + WS broadcast)
 	go func() {

@@ -4,8 +4,8 @@ import { AgentView } from "./agent-view.js";
 import { APIClient } from "./api-client.js";
 import { MessageOrb } from "./message-orb.js";
 import { KanbanBoard } from "./kanban.js";
-import { VaultBrowser } from "./vault.js";
-import { OpsConsole } from "./ops.js";
+import { StatsPanel } from "./stats.js";
+import { NotificationsPanel } from "./notifications.js";
 import { CommandPanel } from "./command-panel.js";
 import { ShortcutManager } from "./shortcuts.js";
 import { ConnectionOverlay } from "./connections.js";
@@ -111,7 +111,9 @@ function layoutAgents() {
     if (viewMode !== "galaxy") av.orbit = null;
   }
 
-  if (viewMode === "colony" && colonyProject && projectGroups.has(colonyProject)) {
+  // Note: no projectGroups.has() guard — a freshly created project has zero
+  // agents but must still render its (empty) colony surface, not the galaxy.
+  if (viewMode === "colony" && colonyProject) {
     // --- Colony view: focused project, agents on planet surface ---
     const project = colonyProject;
     const keys = [...(projectGroups.get(project) || new Set())];
@@ -1336,39 +1338,6 @@ function openDetail(av) {
   // Token usage
   updateAgentTokenDetail(av.project, av.name);
 
-  // Skills
-  const detailSkillsEl = document.getElementById("detail-skills");
-  if (detailSkillsEl) {
-    client.fetchSkills(av.project).then(skills => {
-      // Filter to skills linked to this agent's profile
-      const agentSkills = skills.filter(s => {
-        // If skill has profiles, check if agent is in them
-        return true; // Show all skills for now, profiles loaded on expand
-      });
-      OpsConsole.renderSkillsSection(detailSkillsEl, agentSkills);
-    });
-  }
-
-  // Quotas
-  const detailQuotasEl = document.getElementById("detail-quotas");
-  if (detailQuotasEl) {
-    client.fetchAgentQuota(av.name, av.project).then(quota => {
-      OpsConsole.renderQuotasSection(detailQuotasEl, quota);
-    });
-  }
-
-  // Elevation
-  const detailElevationEl = document.getElementById("detail-elevation");
-  if (detailElevationEl) {
-    client.fetchElevations(av.project).then(elevations => {
-      const agentElevations = (elevations || []).filter(e =>
-        (e.agent === av.name || e.profile_slug === av.name) &&
-        (!e.expires_at || new Date(e.expires_at) > Date.now())
-      );
-      OpsConsole.renderElevationSection(detailElevationEl, agentElevations, client, av.project, av.name);
-    });
-  }
-
   // Nav label
   const keys = getAgentKeys();
   const currentIdx = keys.indexOf(focusedAgent);
@@ -1387,12 +1356,9 @@ function openDetail(av) {
   // Feed command panel with ALL agent data (replaces side drawer)
   (async () => {
     const slug = av.name;
-    const [profile, quota, skills, allMsgs, spawnChildren] = await Promise.all([
+    const [profile, allMsgs] = await Promise.all([
       client.fetchProfile(slug, av.project),
-      client.fetchAgentQuota(slug, av.project),
-      client.fetchSkills(av.project, slug),
       client.fetchAllMessagesAllProjects(),
-      client.fetchSpawnChildren(av.project, slug, ''),
     ]);
 
     // Agent tasks
@@ -1421,18 +1387,11 @@ function openDetail(av) {
       slug: profile?.slug || slug,
       name: profile?.name || av.name,
       role: profile?.role || av.role,
-      context_pack: profile?.context_pack || '',
-      vault_paths: profile?.vault_paths || '',
-      allowed_tools: profile?.allowed_tools || '',
-      pool_size: profile?.pool_size || 1,
-      _quota: quota || {},
-      _skills: skills || [],
       _tasks: agentTasks,
       _recentMsgs: agentMsgs,
       _reportsTo: av._reportsTo,
       _directReports: directReports,
       _teams: av._teams || [],
-      _spawnChildren: spawnChildren || [],
       _navLabel: `${idx + 1} / ${keys.length}`,
     };
     commandPanel.setAgent(agentData);
@@ -1631,7 +1590,7 @@ canvas.addEventListener("click", (e) => {
             detailPanel.classList.remove("open");
             loadMessages();
             if (activeTab === "tasks") renderTasks();
-            if (currentMode === "kanban") kanbanBoard.setTasks(getViewFilteredTasks());
+            if (currentMode === "kanban") refreshKanban();
             return;
           }
           return;
@@ -1729,6 +1688,12 @@ function _loadDysonSettings() {
       currentDysonType = settings.dyson_type;
       world._dysonType = currentDysonType;
     }
+    // Mode-awareness: linear → read-only board; native → writable .kb-form.
+    if (settings && typeof settings.linear_mode === "boolean") {
+      linearMode = settings.linear_mode;
+      linearProject = (settings.linear && settings.linear.project) || "";
+      kanbanBoard.setMode(isLinearBoard());
+    }
   }).catch(() => {});
 }
 
@@ -1815,10 +1780,12 @@ canvas.addEventListener("wheel", (e) => {
   engine.camera.zoomAt(sx, sy, e.deltaY, engine.width, engine.height);
 }, { passive: false });
 
-// Re-layout + re-fit on resize
-window.addEventListener("resize", () => {
+// Re-layout + re-fit whenever the stage is actually re-rasterized
+// (window resize or container box change via the engine's ResizeObserver).
+engine.onResize = () => {
   layoutAgents();
-});
+  updateHierarchyLinks();
+};
 
 // --- Helpers ---
 
@@ -1886,7 +1853,7 @@ tabMessages.addEventListener("click", () => {
   messagesPanel.classList.remove("hidden");
   memoriesPanel.classList.add("hidden");
   tasksPanel.classList.add("hidden");
-  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops") setMode("canvas");
+  if (currentMode === "kanban" || currentMode === "stats" || currentMode === "notifications") setMode("canvas");
 });
 
 tabMemories.addEventListener("click", () => {
@@ -1897,7 +1864,7 @@ tabMemories.addEventListener("click", () => {
   memoriesPanel.classList.remove("hidden");
   messagesPanel.classList.add("hidden");
   tasksPanel.classList.add("hidden");
-  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops") setMode("canvas");
+  if (currentMode === "kanban" || currentMode === "stats" || currentMode === "notifications") setMode("canvas");
   loadMemories();
 });
 
@@ -1917,7 +1884,7 @@ tabTasks.addEventListener("click", () => {
   tasksPanel.classList.remove("hidden");
   messagesPanel.classList.add("hidden");
   memoriesPanel.classList.add("hidden");
-  if (currentMode === "kanban" || currentMode === "vault" || currentMode === "ops") setMode("canvas");
+  if (currentMode === "kanban" || currentMode === "stats" || currentMode === "notifications") setMode("canvas");
   loadTasks();
 });
 
@@ -2072,9 +2039,10 @@ function onNewTasks(tasks) {
     }
   }
 
-  // Update kanban if visible
+  // Update kanban if visible — re-fetch the cycle-scoped board (mirror) rather
+  // than feeding unfiltered allTasks, so the cycle filter stays consistent.
   if (currentMode === "kanban") {
-    kanbanBoard.setTasks(getViewFilteredTasks());
+    refreshKanban();
   }
 }
 
@@ -2104,114 +2072,6 @@ function getViewFilteredTasks() {
     return allTasks.filter(t => (t.project || "default") === focusedProject);
   }
   return allTasks;
-}
-
-// --- Quest Tracker HUD ---
-
-const questTracker = document.getElementById("quest-tracker");
-const questTrackerBody = document.getElementById("quest-tracker-body");
-const qtToggle = document.getElementById("qt-toggle");
-const qtHeader = document.getElementById("quest-tracker-header");
-
-if (qtHeader) {
-  qtHeader.addEventListener("click", () => {
-    questTracker.classList.toggle("collapsed");
-  });
-}
-
-let _questCache = [];
-
-async function updateQuestTracker() {
-  if (!focusedProject) {
-    if (questTracker) questTracker.classList.add("hidden");
-    return;
-  }
-  const cascade = await client.fetchGoalCascade(focusedProject);
-  _questCache = cascade;
-  renderQuestTracker(cascade);
-}
-
-function renderQuestTracker(goals) {
-  if (!questTrackerBody || !questTracker) return;
-
-  // Show only in colony view
-  if (viewMode !== "colony") {
-    questTracker.classList.add("hidden");
-    return;
-  }
-
-  if (!goals || goals.length === 0) {
-    questTracker.classList.add("hidden");
-    return;
-  }
-
-  questTracker.classList.remove("hidden");
-
-  const statusIcon = (status) => {
-    switch (status) {
-      case "done": case "completed": return `<span class="qt-task-icon done">\u2714</span>`;
-      case "in-progress": case "in_progress": return `<span class="qt-task-icon in-progress">\u25B6</span>`;
-      case "blocked": return `<span class="qt-task-icon blocked">\u2716</span>`;
-      default: return `<span class="qt-task-icon pending">\u25CB</span>`;
-    }
-  };
-
-  const krIcon = (g) => {
-    if (g.progress >= 1) return `<span class="qt-kr-icon done">\u2714</span>`;
-    if (g.progress > 0) return `<span class="qt-kr-icon active">\u25B6</span>`;
-    return `<span class="qt-kr-icon pending">\u25CB</span>`;
-  };
-
-  const progressBar = (progress) => {
-    const pct = Math.round(progress * 100);
-    const cls = pct >= 100 ? "green" : pct > 0 ? "yellow" : "red";
-    return `<div class="qt-progress"><div class="qt-progress-fill ${cls}" style="width:${pct}%"></div></div>`;
-  };
-
-  // Recursive renderer — supports any goal type at any depth
-  const renderGoal = (g, depth) => {
-    let out = "";
-    if (depth === 0) {
-      // Root level = mission style
-      out += `<div class="qt-mission">`;
-      out += `<div class="qt-mission-title">${esc(g.title)}</div>`;
-      out += progressBar(g.progress);
-    } else if (depth === 1) {
-      // Objective level
-      const pct = Math.round(g.progress * 100);
-      out += `<div class="qt-objective">`;
-      out += `<div class="qt-obj-row"><span class="qt-obj-title">${esc(g.title)}</span><span class="qt-obj-pct">${pct}%</span></div>`;
-      out += progressBar(g.progress);
-    } else {
-      // Key result / leaf level
-      out += `<div class="qt-kr"><div class="qt-kr-row">`;
-      out += krIcon(g);
-      out += `<span class="qt-kr-title">${esc(g.title)}</span>`;
-      if (g.owner_agent) out += `<span class="qt-kr-agent">${esc(g.owner_agent)}</span>`;
-      out += `</div></div>`;
-    }
-
-    if (g.children && g.children.length > 0) {
-      for (const child of g.children) {
-        out += renderGoal(child, depth + 1);
-      }
-    }
-
-    if (depth <= 1) out += `</div>`;
-    return out;
-  };
-
-  let html = "";
-  for (const g of goals) {
-    html += renderGoal(g, 0);
-  }
-
-  if (!html) {
-    questTracker.classList.add("hidden");
-    return;
-  }
-
-  questTrackerBody.innerHTML = html;
 }
 
 function esc(s) {
@@ -2304,7 +2164,7 @@ function renderTasks() {
       </div>
     `;
 
-    el.addEventListener("click", () => {
+    el.addEventListener("click", async () => {
       const existing = el.querySelector(".task-expanded");
       if (existing) { existing.remove(); return; }
       const expanded = document.createElement("div");
@@ -2316,6 +2176,32 @@ function renderTasks() {
       if (task.blocked_reason) details += `\n\nBlocked: ${task.blocked_reason}`;
       expanded.textContent = details;
       el.appendChild(expanded);
+
+      // Progress notes — surfaced between claim and complete for long-running tasks.
+      try {
+        const proj = task.project || "default";
+        const resp = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/progress?project=${encodeURIComponent(proj)}`);
+        if (resp.ok) {
+          const notes = await resp.json();
+          if (Array.isArray(notes) && notes.length > 0) {
+            const notesEl = document.createElement("div");
+            notesEl.className = "task-progress-notes";
+            const title = document.createElement("div");
+            title.className = "task-progress-title";
+            title.textContent = `Progress (${notes.length})`;
+            notesEl.appendChild(title);
+            for (const n of notes) {
+              const line = document.createElement("div");
+              line.className = "task-progress-note";
+              line.textContent = `[${formatTime(n.created_at)}] ${n.agent}: ${n.note}`;
+              notesEl.appendChild(line);
+            }
+            el.appendChild(notesEl);
+          }
+        }
+      } catch (_e) {
+        // best-effort — swallow fetch failures.
+      }
     });
 
     tasksList.appendChild(el);
@@ -2447,67 +2333,66 @@ function updateConvFilterOptions() {
 
 // --- Layout modes ---
 
-let currentMode = "canvas"; // "canvas" | "detail" | "kanban" | "vault" | "ops"
+let currentMode = "canvas"; // "canvas" | "detail" | "kanban"
 let viewMode = "galaxy"; // "galaxy" | "colony" — top-level screen state
+let linearMode = false; // true when the relay mirrors Linear (legacy global flag)
+let linearProject = ""; // the mirror project (e.g. "syn") — only ITS board is read-only
+
+// Read-only applies to the Linear mirror project only; native projects keep
+// their writable board even while the connector runs.
+function isLinearBoard() {
+  return !!linearProject && (focusedProject || "default") === linearProject;
+}
 let projectsData = []; // cached ProjectInfo[] from /api/projects
 let colonyProject = null; // project name when in colony view
 
 function setMode(mode) {
   currentMode = mode;
   const main = document.getElementById("main");
-  main.classList.remove("mode-canvas", "mode-detail", "mode-kanban", "mode-vault", "mode-ops");
+  main.classList.remove("mode-canvas", "mode-detail", "mode-kanban", "mode-stats", "mode-notifications");
 
   // Update header mode buttons
   document.querySelectorAll(".mode-btn").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.mode === mode);
+    const isActive = btn.dataset.mode === mode;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
 
-  // Show/hide kanban — fetch + render BEFORE making panel visible
+  // Show/hide kanban — fetch board (mirror read-replica) + cycles BEFORE showing.
   if (mode === "kanban") {
-    const boardsFetch = focusedProject ? client.fetchBoards(focusedProject) : client.fetchAllBoards();
-    Promise.all([client.fetchAllTasks(), boardsFetch, client.fetchAllGoals()]).then(([tasks, boards, goals]) => {
-      allTasks = tasks;
-      // Batch data + set fingerprints to prevent redundant re-renders from polling
-      kanbanBoard.boards = boards || [];
-      kanbanBoard._boardsFP = kanbanBoard._fingerprint(kanbanBoard.boards);
-      kanbanBoard.goals = goals || [];
-      kanbanBoard._goalsFP = kanbanBoard._fingerprint(kanbanBoard.goals);
-      kanbanBoard.goalMap.clear();
-      for (const g of kanbanBoard.goals) kanbanBoard.goalMap.set(g.id, g);
-      kanbanBoard.tasks = getViewFilteredTasks();
-      kanbanBoard._tasksFP = kanbanBoard._fingerprint(kanbanBoard.tasks);
-      // Single full render, then show
-      kanbanBoard._fullRender();
+    kanbanBoard.setMode(isLinearBoard());
+    const project = focusedProject || "default";
+    Promise.all([
+      client.fetchCycles(project),
+      client.fetchBoardTasks(project, kanbanBoard.selectedCycle),
+    ]).then(([cycles, tasks]) => {
+      kanbanBoard.setCycles(cycles || []);
+      kanbanBoard.setTasks(tasks || []);
       main.classList.add("mode-kanban");
       kanbanBoard.show();
-      taskCountEl.textContent = allTasks.filter(t => t.status !== "done").length;
     });
+    statsPanel.hide();
+  } else if (mode === "stats") {
+    main.classList.add("mode-stats");
+    kanbanBoard.hide();
+    statsPanel.setProject(focusedProject || colonyProject || null);
+    statsPanel.show();
   } else {
     main.classList.add(`mode-${mode}`);
     kanbanBoard.hide();
+    statsPanel.hide();
   }
 
-  // Show/hide vault
-  if (mode === "vault") {
-    vaultBrowser.show();
-    const project = focusedProject || "";
-    const fetchDocs = project ? client.fetchVaultDocs(project) : client.fetchAllVaultDocs();
-    fetchDocs.then(docs => {
-      vaultBrowser.setDocs(docs);
-    });
+  // Show/hide notifications
+  if (mode === "notifications") {
+    main.classList.add("mode-notifications");
+    notificationsView.show(focusedProject || "default");
   } else {
-    vaultBrowser.hide();
+    notificationsView.hide();
   }
 
-  // Show/hide ops
-  if (mode === "ops") {
-    opsConsole.show(focusedProject || "default");
-  } else {
-    opsConsole.hide();
-  }
-
-  // Messages panel: hidden in kanban/vault/ops mode
-  if (mode === "kanban" || mode === "vault" || mode === "ops") {
+  // Messages panel: hidden in kanban/stats/notifications mode
+  if (mode === "kanban" || mode === "stats" || mode === "notifications") {
     messagesPanel.classList.add("hidden");
     memoriesPanel.classList.add("hidden");
     tasksPanel.classList.add("hidden");
@@ -2702,7 +2587,6 @@ function setViewMode(mode, project) {
     detailPanel.classList.remove("open");
     document.getElementById("main").classList.remove("agent-focused");
     setMode("canvas");
-    if (questTracker) questTracker.classList.add("hidden");
     stopTokenPolling();
     startGalaxyTokenPolling();
     commandPanel.hide();
@@ -2719,7 +2603,6 @@ function setViewMode(mode, project) {
     requestAnimationFrame(() => { engine.resize(); layoutAgents(); updateHierarchyLinks(); });
     loadMessages();
     if (activeTab === "tasks") renderTasks();
-    updateQuestTracker();
     // Reset counters and start live polling
     stopGalaxyTokenPolling();
     _tokenCurrent = { tokens: 0, calls: 0 };
@@ -2941,18 +2824,40 @@ const kanbanBoard = new KanbanBoard(kanbanPanel);
 window._kanbanBoard = kanbanBoard;
 kanbanBoard.hide();
 
+// --- Stats panel ---
+const statsPanel = new StatsPanel(document.getElementById("stats-panel"));
+window._statsPanel = statsPanel;
+statsPanel.hide();
+
+// Reload the board from the mirror read-replica (one call, cycle-aware).
+async function refreshKanban() {
+  const project = focusedProject || "default";
+  const tasks = await client.fetchBoardTasks(project, kanbanBoard.selectedCycle);
+  kanbanBoard.setTasks(tasks || []);
+}
+
+// Read-only card detail comments come from the relay's progress notes.
+kanbanBoard.fetchProgress = (taskId, project) => client.fetchTaskProgress(taskId, project);
+
+// Cycle filter change → re-fetch the board scoped to the chosen cycle.
+kanbanBoard.onCycleChange = async () => {
+  const project = focusedProject || "default";
+  const [cycles, tasks] = await Promise.all([
+    client.fetchCycles(project),
+    client.fetchBoardTasks(project, kanbanBoard.selectedCycle),
+  ]);
+  kanbanBoard.setCycles(cycles || []);
+  kanbanBoard.setTasks(tasks || []);
+};
+
+// Native-mode mutations (no-ops wired in linear/read-only mode by the board UI).
 kanbanBoard.onTransition = async (taskId, newStatus, agentName) => {
-  const task = allTasks.find(t => t.id === taskId);
-  const project = task ? task.project || "default" : "default";
+  const project = focusedProject || "default";
   const result = await client.transitionTask(taskId, newStatus, project, agentName || "user");
   if (result) {
-    // Update local state
-    const idx = allTasks.findIndex(t => t.id === taskId);
-    if (idx >= 0) allTasks[idx] = result;
-    kanbanBoard.setTasks(getViewFilteredTasks());
+    kanbanBoard.upsertTask(result);
     updateAgentTaskLabels();
     if (activeTab === "tasks") renderTasks();
-    taskCountEl.textContent = allTasks.filter(t => t.status !== "done").length;
   }
 };
 
@@ -2965,11 +2870,10 @@ kanbanBoard.onDispatch = async (data) => {
     description: data.description,
     priority: data.priority,
     parent_task_id: data.parent_task_id || undefined,
-    goal_id: data.goal_id || undefined,
   });
   if (result) {
     allTasks.push(result);
-    kanbanBoard.setTasks(getViewFilteredTasks());
+    kanbanBoard.upsertTask(result);
     taskCountEl.textContent = allTasks.filter(t => t.status !== "done").length;
   }
 };
@@ -2978,7 +2882,8 @@ kanbanBoard.onDelete = async (taskId, project) => {
   const ok = await client.deleteTask(taskId, project);
   if (ok) {
     allTasks = allTasks.filter(t => t.id !== taskId);
-    kanbanBoard.setTasks(getViewFilteredTasks());
+    kanbanBoard.tasks = kanbanBoard.tasks.filter(t => t.id !== taskId);
+    kanbanBoard.setTasks(kanbanBoard.tasks.slice());
     taskCountEl.textContent = allTasks.filter(t => t.status !== "done").length;
     if (activeTab === "tasks") renderTasks();
   }
@@ -2989,38 +2894,33 @@ kanbanBoard.onEdit = async (taskId, project, data) => {
   if (result) {
     const idx = allTasks.findIndex(t => t.id === taskId);
     if (idx >= 0) allTasks[idx] = result;
-    kanbanBoard.setTasks(getViewFilteredTasks());
+    kanbanBoard.upsertTask(result);
     if (activeTab === "tasks") renderTasks();
   }
 };
 
-// --- Vault browser ---
+// Real-time: SSE task lifecycle events upsert the board in place (no full
+// reload). The event payload is minimal {agent, task_id, ...}; we re-fetch the
+// single task to get the full mirror row, then upsert it. Wired in the start
+// block once `client` exists.
+function wireKanbanEvents() {
+  client.subscribeTaskEvents(async (evt) => {
+    const taskId = evt.semantic && evt.semantic.task_id;
+    if (!taskId) return;
+    // Only bother if the kanban is the active view (cheap, avoids noise).
+    if (currentMode !== "kanban") return;
+    const project = focusedProject || (evt.project || "default");
+    const full = await client.fetchTask(taskId, project);
+    if (full) kanbanBoard.upsertTask(full);
+    else await refreshKanban(); // task may have been filtered/removed
+  });
+}
 
-const vaultPanel = document.getElementById("vault-panel");
-const vaultBrowser = new VaultBrowser(vaultPanel);
-vaultBrowser.hide();
-
-// --- Ops console (early init, client wired later) ---
-const opsPanel = document.getElementById("ops-panel");
-const opsConsole = new OpsConsole(opsPanel);
-opsConsole.hide();
-
-vaultBrowser.onSearch = async (query) => {
-  const project = focusedProject || "";
-  const result = await client.searchVaultDocs(project, query);
-  vaultBrowser.setSearchResults(result.results || []);
-};
-
-vaultBrowser.onSelectDoc = async (path) => {
-  const project = focusedProject || "";
-  const doc = await client.fetchVaultDoc(project, path);
-  if (doc) vaultBrowser.showDocContent(doc);
-};
-
-vaultBrowser.onSaveDoc = async (path, content) => {
-  const project = focusedProject || "";
-  return await client.updateVaultDoc(project, path, content);
-};
+// --- Notifications panel ---
+const notificationsPanel = document.getElementById("notifications-panel");
+const notificationsView = new NotificationsPanel(notificationsPanel);
+notificationsView.hide();
+window._notificationsView = notificationsView;
 
 // --- Keyboard shortcuts ---
 
@@ -3033,11 +2933,11 @@ shortcuts.register("1", "mode-canvas", "Agents view", () => {
 shortcuts.register("2", "mode-kanban", "Kanban view", () => {
   if (viewMode === "colony") setMode("kanban");
 });
-shortcuts.register("3", "mode-vault", "Docs view", () => {
-  if (viewMode === "colony") setMode("vault");
+shortcuts.register("3", "mode-stats", "Stats view", () => {
+  if (viewMode === "colony") setMode("stats");
 });
-shortcuts.register("4", "mode-ops", "Ops view", () => {
-  if (viewMode === "colony") setMode("ops");
+shortcuts.register("4", "mode-notifications", "Notifications view", () => {
+  if (viewMode === "colony") setMode("notifications");
 });
 
 // Colony sidebar tabs
@@ -3055,7 +2955,10 @@ shortcuts.register("t", "tab-tasks", "Tasks tab", () => {
 });
 
 shortcuts.register("Escape", "close", "Close / return to galaxy", () => {
-  if (detailPanel.classList.contains("open")) {
+  const helpEl = document.getElementById("help-modal");
+  if (helpEl && !helpEl.classList.contains("hidden")) {
+    helpEl.classList.add("hidden");
+  } else if (detailPanel.classList.contains("open")) {
     detailPanel.classList.remove("open");
     focusedAgent = null;
     loadMessages();
@@ -3084,13 +2987,14 @@ shortcuts.register("ArrowDown", "colony-next", "Next colony", () => {
   setViewMode("colony", names[next]);
 });
 shortcuts.register("/", "search", "Focus search", () => {
-  if (viewMode !== "colony" || currentMode === "kanban" || currentMode === "ops") return;
+  if (viewMode !== "colony" || currentMode === "kanban") return;
   if (msgSearchInput) msgSearchInput.focus();
 });
 shortcuts.register("n", "new-task", "New task", () => {
   if (viewMode !== "colony") return;
+  if (isLinearBoard()) return; // read-only on the mirror project — planning lives in Linear
   if (currentMode !== "kanban") setMode("kanban");
-  kanbanBoard._showDispatchForm();
+  kanbanBoard._showCreateForm();
 });
 
 // Agent navigation with arrows
@@ -3129,7 +3033,6 @@ shortcuts.start();
 
 console.log("[relay] UI initializing...");
 const client = new APIClient(onAgents, onConversations, onNewMessages, onNewTasks, onActivity);
-kanbanBoard.apiClient = client;
 
 // --- Command panel (wire client) ---
 const commandPanel = new CommandPanel(
@@ -3155,37 +3058,83 @@ commandPanel.onNavigate = (arg) => {
   }
 };
 
-// --- Ops console (wire client) ---
-opsConsole.client = client;
-opsConsole.onAgentClick = (project, name) => {
-  const key = agentKey(project, name);
-  const av = agentViews.get(key);
-  if (av) { av.triggerRipple(); openDetail(av); }
-};
-
-client.onGoals = (goals) => {
-  if (currentMode === "kanban") {
-    kanbanBoard.setGoals(goals);
-  }
-};
 _loadDysonSettings();
 // Defer start to after first paint so canvas has correct dimensions
 requestAnimationFrame(() => {
   engine.resize();
   client.start();
+  wireKanbanEvents();
   loadMessages();
   loadTasks();
   fetchTeamsData();
   fetchProjectsData();
   _teamsFetchTimer = setInterval(fetchTeamsData, 10000);
   setInterval(fetchProjectsData, 10000);
-  setInterval(() => { if (viewMode === "colony") updateQuestTracker(); }, 15000);
   setInterval(fetchFileLockData, 5000);
   startGalaxyTokenPolling();
   console.log("[relay] polling started");
 });
 
 // --- Help modal ---
+// --- Settings modal (Linear connector) ---
+const settingsBtn = document.getElementById("settings-btn");
+const settingsModal = document.getElementById("settings-modal");
+const settingsClose = document.getElementById("settings-close");
+if (settingsBtn && settingsModal) {
+  const $ = (id) => document.getElementById(id);
+  const openSettings = async () => {
+    settingsModal.classList.remove("hidden");
+    const st = await client.fetchSettings();
+    const lin = (st && st.linear) || {};
+    $("set-linear-enabled").checked = !!lin.enabled;
+    $("set-linear-key").value = "";
+    $("set-linear-key").placeholder = lin.api_key_masked ? `configurée (${lin.api_key_masked})` : "lin_api_...";
+    $("set-linear-team-status").textContent = lin.team_key ? `team actuelle : ${lin.team_key}` : "";
+    $("set-linear-status").textContent = lin.source === "env" ? "config par variables d'env (prioritaire)" : "";
+  };
+  settingsBtn.addEventListener("click", openSettings);
+  settingsClose.addEventListener("click", () => settingsModal.classList.add("hidden"));
+  settingsModal.querySelector(".help-overlay").addEventListener("click", () => settingsModal.classList.add("hidden"));
+
+  $("set-linear-load-teams").addEventListener("click", async () => {
+    const statusEl = $("set-linear-team-status");
+    statusEl.textContent = "chargement…";
+    const typed = $("set-linear-key").value.trim();
+    const qs = typed ? `?key=${encodeURIComponent(typed)}` : "";
+    try {
+      const res = await fetch(`/api/linear/teams${qs}`);
+      if (!res.ok) throw new Error((await res.json()).error || res.status);
+      const teams = await res.json();
+      const cur = (await client.fetchSettings())?.linear?.team_key || "";
+      $("set-linear-teams").innerHTML = (teams || []).map(t => `
+        <label><input type="radio" name="linear-team" value="${t.key}" ${t.key === cur ? "checked" : ""}>
+          <span>${t.key} — ${t.name}</span>
+          ${t.active_cycle ? `<span class="team-cycle">cycle actif : ${t.active_cycle}</span>` : ""}
+        </label>`).join("");
+      statusEl.textContent = `${teams.length} team(s)`;
+    } catch (e) {
+      statusEl.textContent = `erreur : ${e.message}`;
+    }
+  });
+
+  $("set-linear-save").addEventListener("click", async () => {
+    const statusEl = $("set-linear-status");
+    const payload = { linear_enabled: $("set-linear-enabled").checked ? "1" : "0" };
+    const typed = $("set-linear-key").value.trim();
+    if (typed) payload.linear_api_key = typed;
+    const team = settingsModal.querySelector('input[name="linear-team"]:checked');
+    if (team) payload.linear_team_key = team.value;
+    statusEl.textContent = "enregistrement…";
+    await client.updateSettings(payload);
+    const st = await client.fetchSettings();
+    linearMode = !!(st && st.linear_mode);
+    linearProject = (st && st.linear && st.linear.project) || "";
+    statusEl.textContent = st?.linear?.enabled
+      ? `actif — team ${st.linear.team_key}, poll ${st.linear.interval}`
+      : "désactivé";
+  });
+}
+
 const helpBtn = document.getElementById("help-btn");
 const helpModal = document.getElementById("help-modal");
 const helpClose = document.getElementById("help-close");

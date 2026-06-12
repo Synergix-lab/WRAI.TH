@@ -1,6 +1,8 @@
 package db
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -33,8 +35,17 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 		layer = "behavior"
 	}
 
-	// Find existing active memory at this scope+key
-	existing, err := d.findActiveMemory(project, scope, agentName, key)
+	// Wrap the read-modify-write in a BEGIN IMMEDIATE transaction so SQLite
+	// acquires the write lock before the SELECT. Without this, concurrent
+	// writers on the same key can both read the same max version and both
+	// insert as version+1, breaking the supersedes chain.
+	tx, err := d.conn.BeginTx(context.Background(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	existing, err := d.findActiveMemoryTx(tx, project, scope, agentName, key)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +55,15 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 	if existing != nil {
 		if existing.Value == value {
 			// Same value — just update timestamp
-			_, err := d.conn.Exec(
+			_, err := tx.Exec(
 				`UPDATE memories SET updated_at = ?, tags = ?, confidence = ? WHERE id = ?`,
 				now, tagsJSON, confidence, existing.ID,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("update memory: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return nil, fmt.Errorf("commit memory noop: %w", err)
 			}
 			existing.UpdatedAt = now
 			existing.Tags = tagsJSON
@@ -59,7 +73,7 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 
 		if doUpsert {
 			// Upsert mode — archive old version and insert new one silently
-			_, archErr := d.conn.Exec(
+			_, archErr := tx.Exec(
 				`UPDATE memories SET archived_at = ?, archived_by = ? WHERE id = ?`,
 				now, "upsert", existing.ID,
 			)
@@ -81,7 +95,7 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 				UpdatedAt:  now,
 				Layer:      layer,
 			}
-			_, err := d.conn.Exec(
+			_, err := tx.Exec(
 				`INSERT INTO memories (id, key, value, tags, scope, project, agent_name, confidence, version, supersedes, created_at, updated_at, layer)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				mem.ID, mem.Key, mem.Value, mem.Tags, mem.Scope, mem.Project,
@@ -90,6 +104,9 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 			)
 			if err != nil {
 				return nil, fmt.Errorf("insert upserted memory: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return nil, fmt.Errorf("commit upsert: %w", err)
 			}
 			return mem, nil
 		}
@@ -112,7 +129,7 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 			Layer:        layer,
 		}
 
-		_, err := d.conn.Exec(
+		_, err := tx.Exec(
 			`INSERT INTO memories (id, key, value, tags, scope, project, agent_name, confidence, version, supersedes, conflict_with, created_at, updated_at, layer)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			mem.ID, mem.Key, mem.Value, mem.Tags, mem.Scope, mem.Project,
@@ -121,6 +138,9 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert conflicting memory: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit conflict: %w", err)
 		}
 		return mem, nil
 	}
@@ -141,7 +161,7 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 		Layer:      layer,
 	}
 
-	_, err = d.conn.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO memories (id, key, value, tags, scope, project, agent_name, confidence, version, created_at, updated_at, layer)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		mem.ID, mem.Key, mem.Value, mem.Tags, mem.Scope, mem.Project,
@@ -150,7 +170,53 @@ func (d *DB) SetMemory(project, agentName, key, value, tagsJSON, scope, confiden
 	if err != nil {
 		return nil, fmt.Errorf("insert memory: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit insert: %w", err)
+	}
 	return mem, nil
+}
+
+// findActiveMemoryTx is like findActiveMemory but reads through an open
+// write transaction. Required so SetMemory holds the lock from read to
+// write and prevents the version race observed under concurrent writers
+// on the same key.
+func (d *DB) findActiveMemoryTx(tx *sql.Tx, project, scope, agentName, key string) (*models.Memory, error) {
+	var query string
+	var args []any
+	switch scope {
+	case "agent":
+		query = `SELECT id, key, value, tags, scope, project, agent_name, confidence, version,
+			 supersedes, conflict_with, created_at, updated_at, archived_at, archived_by, layer
+			 FROM memories WHERE key = ? AND scope = 'agent' AND project = ? AND agent_name = ? AND archived_at IS NULL
+			 ORDER BY version DESC LIMIT 1`
+		args = []any{key, project, agentName}
+	case "project":
+		query = `SELECT id, key, value, tags, scope, project, agent_name, confidence, version,
+			 supersedes, conflict_with, created_at, updated_at, archived_at, archived_by, layer
+			 FROM memories WHERE key = ? AND scope = 'project' AND project = ? AND archived_at IS NULL
+			 ORDER BY version DESC LIMIT 1`
+		args = []any{key, project}
+	case "global":
+		query = `SELECT id, key, value, tags, scope, project, agent_name, confidence, version,
+			 supersedes, conflict_with, created_at, updated_at, archived_at, archived_by, layer
+			 FROM memories WHERE key = ? AND scope = 'global' AND archived_at IS NULL
+			 ORDER BY version DESC LIMIT 1`
+		args = []any{key}
+	default:
+		return nil, fmt.Errorf("invalid scope: %s", scope)
+	}
+	row := tx.QueryRow(query, args...)
+	var m models.Memory
+	err := row.Scan(&m.ID, &m.Key, &m.Value, &m.Tags, &m.Scope, &m.Project, &m.AgentName,
+		&m.Confidence, &m.Version, &m.Supersedes, &m.ConflictWith, &m.CreatedAt,
+		&m.UpdatedAt, &m.ArchivedAt, &m.ArchivedBy, &m.Layer)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
 }
 
 // GetMemory retrieves a memory by key with scope cascade: agent → project → global.
@@ -252,7 +318,7 @@ func (d *DB) SearchMemory(project, agentName, query string, tags []string, scope
 			 ORDER BY rank
 			 LIMIT ?`, where,
 		)
-		args = append(args, query, limit)
+		args = append(args, escapeFTSQuery(query), limit)
 	} else {
 		sql = fmt.Sprintf(
 			`SELECT m.id, m.key, m.value, m.tags, m.scope, m.project, m.agent_name, m.confidence, m.version,
@@ -527,8 +593,28 @@ func (d *DB) SearchAllMemories(query string, limit int) ([]models.Memory, error)
 		 WHERE m.archived_at IS NULL AND memories_fts MATCH ?
 		 ORDER BY rank
 		 LIMIT ?`,
-		query, limit,
+		escapeFTSQuery(query), limit,
 	)
+}
+
+// escapeFTSQuery wraps each token in double quotes so FTS5 does not interpret
+// punctuation (especially hyphens) as column filters or operators. Empty tokens
+// are skipped. A bare token stays a bare token, but `state-machine` becomes
+// `"state-machine"` and is treated as a literal string to search.
+func escapeFTSQuery(q string) string {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return q
+	}
+	// Fields() splits on any whitespace
+	tokens := strings.Fields(q)
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		// Escape embedded double-quotes by doubling them (FTS5 convention)
+		t = strings.ReplaceAll(t, `"`, `""`)
+		out = append(out, `"`+t+`"`)
+	}
+	return strings.Join(out, " ")
 }
 
 // DeleteMemoryByID soft-deletes a specific memory by ID (for web UI).
