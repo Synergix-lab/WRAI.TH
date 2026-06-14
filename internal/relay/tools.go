@@ -10,6 +10,10 @@ var asParam = mcp.WithString("as", mcp.Description("Act as this agent (overrides
 // so agents can switch projects without changing the MCP connection.
 var projectParam = mcp.WithString("project", mcp.Description("Project namespace (overrides the connection URL default)."))
 
+// formatParam is the shared output-format selector for list/get tools that can
+// render either a compact markdown table (default, ~half the tokens) or JSON.
+var formatParam = mcp.WithString("format", mcp.Description("'md' (default, markdown table — ~half the tokens) or 'json'"), mcp.Enum("md", "json"))
+
 func whoamiTool() mcp.Tool {
 	return mcp.NewTool(
 		"whoami",
@@ -74,7 +78,7 @@ func getInboxTool() mcp.Tool {
 		mcp.WithString("from", mcp.Description("Filter by sender")),
 		mcp.WithString("since", mcp.Description("Only messages after this ISO timestamp")),
 		mcp.WithBoolean("exclude_broadcasts", mcp.Description("Exclude broadcasts (default false)")),
-		mcp.WithString("format", mcp.Description("'md' (default, markdown table — ~half the tokens) or 'json'"), mcp.Enum("md", "json")),
+		formatParam,
 	)
 }
 
@@ -89,9 +93,11 @@ func ackDeliveryTool() mcp.Tool {
 func getThreadTool() mcp.Tool {
 	return mcp.NewTool(
 		"get_thread",
-		mcp.WithDescription("Get the full message thread containing the given message."),
+		mcp.WithDescription("Get the message thread containing the given message (up to 200 messages). Content is preview-truncated by default; pass full_content=true for untruncated bodies."),
 		projectParam,
 		mcp.WithString("message_id", mcp.Description("Any message ID in the thread"), mcp.Required()),
+		mcp.WithBoolean("full_content", mcp.Description("Full content instead of 300-char truncation (default false)")),
+		formatParam,
 	)
 }
 
@@ -100,7 +106,7 @@ func listAgentsTool() mcp.Tool {
 		"list_agents",
 		mcp.WithDescription("List registered agents and their status."),
 		projectParam,
-		mcp.WithString("format", mcp.Description("'md' (default, markdown table — ~half the tokens) or 'json'"), mcp.Enum("md", "json")),
+		formatParam,
 	)
 }
 
@@ -256,7 +262,7 @@ func listMemoriesTool() mcp.Tool {
 		mcp.WithArray("tags", mcp.Description("Filter by tags"), mcp.WithStringItems()),
 		mcp.WithString("agent", mcp.Description("Filter by author")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
-		mcp.WithString("format", mcp.Description("'md' (default, markdown table — ~half the tokens) or 'json'"), mcp.Enum("md", "json")),
+		formatParam,
 	)
 }
 
@@ -452,7 +458,7 @@ func listTasksTool() mcp.Tool {
 		mcp.WithString("board_id", mcp.Description("Filter by board")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
 		mcp.WithBoolean("include_archived", mcp.Description("Include archived (default false)")),
-		mcp.WithString("format", mcp.Description("'md' (default, markdown table — ~half the tokens) or 'json'"), mcp.Enum("md", "json")),
+		formatParam,
 	)
 }
 
@@ -742,11 +748,13 @@ func removeTeamMemberTool() mcp.Tool {
 func getTeamInboxTool() mcp.Tool {
 	return mcp.NewTool(
 		"get_team_inbox",
-		mcp.WithDescription("Get messages sent to a team (to='team:slug')."),
+		mcp.WithDescription("Get messages sent to a team (to='team:slug'). Content is preview-truncated by default; pass full_content=true for untruncated bodies."),
 		asParam,
 		projectParam,
 		mcp.WithString("team", mcp.Description("Team slug"), mcp.Required()),
 		mcp.WithNumber("limit", mcp.Description("Max messages (default 50)")),
+		mcp.WithBoolean("full_content", mcp.Description("Full content instead of 300-char truncation (default false)")),
+		formatParam,
 	)
 }
 

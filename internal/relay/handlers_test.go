@@ -378,8 +378,8 @@ func TestGetThread(t *testing.T) {
 		"project": "p1", "as": "bot-b", "to": "bot-a", "content": "reply", "reply_to": msg1ID,
 	}))
 
-	// Get thread
-	threadRes, _ := h.HandleGetThread(ctx, call(map[string]any{"message_id": msg1ID}))
+	// Get thread (json format — default is now a markdown table)
+	threadRes, _ := h.HandleGetThread(ctx, call(map[string]any{"message_id": msg1ID, "format": "json"}))
 	thread := parseJSON(t, threadRes)
 	if thread["count"].(float64) != 2 {
 		t.Errorf("expected 2 messages in thread, got %v", thread["count"])
@@ -1027,9 +1027,9 @@ func TestTeamInbox(t *testing.T) {
 		"project": "p1", "as": "bot-a", "to": "team:dev", "content": "team message",
 	}))
 
-	// Get team inbox
+	// Get team inbox (json format — default is now a markdown table)
 	inboxRes, _ := h.HandleGetTeamInbox(ctx, call(map[string]any{
-		"project": "p1", "team": "dev",
+		"project": "p1", "team": "dev", "format": "json",
 	}))
 	data := parseJSON(t, inboxRes)
 	if data["count"].(float64) != 1 {

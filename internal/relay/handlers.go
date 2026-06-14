@@ -684,15 +684,23 @@ func (h *Handlers) HandleGetThread(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get thread: %v", err)), nil
 	}
 
+	// Thread can hold up to 200 messages; injecting every full body unbounded
+	// could dump 100k+ tokens into context. Preview-truncate (like get_inbox)
+	// unless full_content=true; default to a compact markdown table.
+	fullContent := req.GetBool("full_content", false)
 	formatted := make([]map[string]any, len(messages))
 	for i, m := range messages {
+		content := m.Content
+		if !fullContent && len(content) > msgContentPreview {
+			content = content[:msgContentPreview] + "..."
+		}
 		entry := map[string]any{
 			"id":         m.ID,
 			"from":       m.From,
 			"to":         m.To,
 			"type":       m.Type,
 			"subject":    m.Subject,
-			"content":    m.Content,
+			"content":    content,
 			"created_at": m.CreatedAt,
 			"priority":   m.Priority,
 		}
@@ -702,10 +710,21 @@ func (h *Handlers) HandleGetThread(ctx context.Context, req mcp.CallToolRequest)
 		if m.ConversationID != nil {
 			entry["conversation_id"] = *m.ConversationID
 		}
-		if m.Metadata != "" && m.Metadata != "{}" {
+		// metadata is heavy and rarely needed; only include with full_content.
+		if fullContent && m.Metadata != "" && m.Metadata != "{}" {
 			entry["metadata"] = m.Metadata
 		}
 		formatted[i] = entry
+	}
+
+	if f := req.GetString("format", "md"); f == "md" || f == "table" {
+		rows := make([][]string, len(messages))
+		for i, m := range messages {
+			content, _ := formatted[i]["content"].(string)
+			rows[i] = []string{m.ID, m.From, m.To, m.Type, m.Priority, m.CreatedAt, m.Subject, content}
+		}
+		table := renderTable([]string{"id", "from", "to", "type", "priority", "created_at", "subject", "content"}, rows)
+		return h.resultTextTracked(resolveProject(ctx, req), "", "get_thread", fmt.Sprintf("%d messages in thread\n%s", len(messages), table))
 	}
 
 	return h.resultJSONTracked(resolveProject(ctx, req), "", "get_thread", map[string]any{
@@ -2948,10 +2967,43 @@ func (h *Handlers) HandleGetTeamInbox(ctx context.Context, req mcp.CallToolReque
 		msgs = []models.Message{}
 	}
 
+	// Team inboxes carry verbose alert/digest bodies (~4k chars each); preview-
+	// truncate unless full_content=true and default to a compact markdown table
+	// so a busy team inbox can't blow up context. (Previously dumped raw
+	// models.Message structs — all fields, full content.)
+	fullContent := req.GetBool("full_content", false)
+	formatted := make([]map[string]any, len(msgs))
+	for i, m := range msgs {
+		content := m.Content
+		if !fullContent && len(content) > msgContentPreview {
+			content = content[:msgContentPreview] + "..."
+		}
+		formatted[i] = map[string]any{
+			"id":         m.ID,
+			"from":       m.From,
+			"to":         m.To,
+			"type":       m.Type,
+			"subject":    m.Subject,
+			"content":    content,
+			"created_at": m.CreatedAt,
+			"priority":   m.Priority,
+		}
+	}
+
+	if f := req.GetString("format", "md"); f == "md" || f == "table" {
+		rows := make([][]string, len(msgs))
+		for i, m := range msgs {
+			content, _ := formatted[i]["content"].(string)
+			rows[i] = []string{m.ID, m.From, m.To, m.Type, m.Priority, m.CreatedAt, m.Subject, content}
+		}
+		table := renderTable([]string{"id", "from", "to", "type", "priority", "created_at", "subject", "content"}, rows)
+		return h.resultTextTracked(project, "", "get_team_inbox", fmt.Sprintf("%d messages for team %s\n%s", len(msgs), teamSlug, table))
+	}
+
 	return h.resultJSONTracked(project, "", "get_team_inbox", map[string]any{
 		"team":     teamSlug,
 		"count":    len(msgs),
-		"messages": msgs,
+		"messages": formatted,
 	})
 }
 

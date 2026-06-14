@@ -76,13 +76,15 @@ func TestToolsModeFilter(t *testing.T) {
 	}
 	all = append(all, discoverToolsTool(), callToolTool())
 
-	fullCtx := context.Background()
+	// Full mode is now opt-in: it must be explicitly requested.
+	fullCtx := context.WithValue(context.Background(), toolsModeKey, ToolsModeFull)
 	full := toolsModeFilter(fullCtx, all)
 	if len(full) != len(all)-2 {
 		t.Errorf("full mode: %d tools, want %d (discovery pair hidden)", len(full), len(all)-2)
 	}
 
-	discCtx := context.WithValue(context.Background(), toolsModeKey, ToolsModeDiscovery)
+	// Discovery is the default: a bare context resolves to discovery.
+	discCtx := context.Background()
 	disc := toolsModeFilter(discCtx, all)
 	if len(disc) != 2 {
 		t.Errorf("discovery mode: %d tools, want 2", len(disc))
@@ -90,16 +92,25 @@ func TestToolsModeFilter(t *testing.T) {
 }
 
 func TestHTTPContextFuncToolsMode(t *testing.T) {
-	req := &http.Request{URL: &url.URL{RawQuery: "project=p1&tools=discovery"}}
+	// Explicit full opts out of the discovery default.
+	req := &http.Request{URL: &url.URL{RawQuery: "project=p1&tools=full"}}
 	ctx := HTTPContextFunc(context.Background(), req)
-	if ToolsModeFromContext(ctx) != ToolsModeDiscovery {
-		t.Error("tools=discovery not propagated")
+	if ToolsModeFromContext(ctx) != ToolsModeFull {
+		t.Error("tools=full not propagated")
 	}
 
+	// No tools param → discovery (the default).
 	req = &http.Request{URL: &url.URL{RawQuery: "project=p1"}}
 	ctx = HTTPContextFunc(context.Background(), req)
-	if ToolsModeFromContext(ctx) != ToolsModeFull {
-		t.Error("default mode should be full")
+	if ToolsModeFromContext(ctx) != ToolsModeDiscovery {
+		t.Error("default mode should be discovery")
+	}
+
+	// Explicit discovery is also honored.
+	req = &http.Request{URL: &url.URL{RawQuery: "project=p1&tools=discovery"}}
+	ctx = HTTPContextFunc(context.Background(), req)
+	if ToolsModeFromContext(ctx) != ToolsModeDiscovery {
+		t.Error("tools=discovery not propagated")
 	}
 }
 
