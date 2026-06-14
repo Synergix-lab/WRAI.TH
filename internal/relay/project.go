@@ -272,6 +272,7 @@ func projectTasks(tasks []models.Task, maxBytes int) []TaskSummary {
 	}
 	return out
 }
+
 // MemorySummary is the projected form of models.Memory injected into
 // session_context.relevant_memories. Value is truncated to memValuePreview;
 // the full value is reachable via get_memory(key).

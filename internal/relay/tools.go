@@ -556,7 +556,11 @@ func archiveTasksTool() mcp.Tool {
 }
 
 // --- File locks ---
+// Dormant: the lock tools are disabled in toolset.go (v2 dropped advisory
+// locks in favour of worktree isolation). Kept so they can be re-enabled by
+// uncommenting their registrations. nolint:unused until then.
 
+//nolint:unused
 func claimFilesTool() mcp.Tool {
 	return mcp.NewTool(
 		"claim_files",
@@ -568,6 +572,7 @@ func claimFilesTool() mcp.Tool {
 	)
 }
 
+//nolint:unused
 func releaseFilesTool() mcp.Tool {
 	return mcp.NewTool(
 		"release_files",
@@ -578,6 +583,7 @@ func releaseFilesTool() mcp.Tool {
 	)
 }
 
+//nolint:unused
 func listLocksTool() mcp.Tool {
 	return mcp.NewTool(
 		"list_locks",
