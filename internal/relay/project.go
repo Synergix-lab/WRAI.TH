@@ -29,6 +29,16 @@ const sessionUnreadBudget = 6000
 // (see handlers.go). Full bodies are fetched via get_inbox(full_content=true).
 const msgContentPreview = 300
 
+// budgetHardMultiplier caps the absolute size of a projection at this multiple
+// of its soft byte budget. P0 messages/tasks and constraints-layer memories
+// bypass the SOFT budget (they must surface even when it's blown), but they
+// still obey this HARD ceiling — so a flood of P0 items (priority is
+// caller-settable on send_message) from one agent cannot inflate every peer's
+// boot payload without bound. Keeps the paper's invariant |M_boot| ≤ B_max real,
+// with B_max = soft budget × budgetHardMultiplier. Items beyond the ceiling are
+// dropped and surface via the *_omitted counters in session_context.
+const budgetHardMultiplier = 2
+
 // memValuePreview bounds a single memory's value preview in session_context.
 // Full values are fetched via get_memory(key).
 const memValuePreview = 400
@@ -143,9 +153,18 @@ func projectMessages(msgs []models.Message, maxBytes int) []MessageSummary {
 
 	var out []MessageSummary
 	used := 0
+	hardCeil := 0
+	if maxBytes > 0 {
+		hardCeil = maxBytes * budgetHardMultiplier
+	}
 	for _, m := range sorted {
 		s := summarizeMessage(m)
 		b := messageSummaryBytes(s)
+		// Hard ceiling caps the bypass flood; the first (most-important) P0
+		// item always surfaces even under a tiny budget.
+		if hardCeil > 0 && used+b > hardCeil && len(out) > 0 {
+			continue
+		}
 		if m.Priority == "P0" {
 			out = append(out, s)
 			used += b
@@ -255,10 +274,19 @@ func projectTasks(tasks []models.Task, maxBytes int) []TaskSummary {
 
 	var out []TaskSummary
 	used := 0
+	hardCeil := 0
+	if maxBytes > 0 {
+		hardCeil = maxBytes * budgetHardMultiplier
+	}
 	for _, t := range sorted {
 		s := summarizeTask(t)
 		b := taskSummaryBytes(s)
-		// P0 always bypasses the budget
+		// Hard ceiling caps the bypass flood; the first (most-important) P0
+		// item always surfaces even under a tiny budget.
+		if hardCeil > 0 && used+b > hardCeil && len(out) > 0 {
+			continue
+		}
+		// P0 bypasses the soft budget
 		if t.Priority == "P0" {
 			out = append(out, s)
 			used += b
@@ -319,9 +347,18 @@ func projectMemories(mems []models.Memory, maxBytes int) []MemorySummary {
 	}
 	var out []MemorySummary
 	used := 0
+	hardCeil := 0
+	if maxBytes > 0 {
+		hardCeil = maxBytes * budgetHardMultiplier
+	}
 	for _, m := range mems {
 		s := summarizeMemory(m)
 		b := memorySummaryBytes(s)
+		// Hard ceiling caps the bypass flood; the first (most-important)
+		// constraints memory always surfaces even under a tiny budget.
+		if hardCeil > 0 && used+b > hardCeil && len(out) > 0 {
+			continue
+		}
 		if m.Layer == "constraints" {
 			out = append(out, s)
 			used += b

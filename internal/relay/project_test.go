@@ -239,3 +239,59 @@ func TestProjectMemories_BudgetBound(t *testing.T) {
 		t.Fatalf("budget exceeded: %d > %d", used, sessionMemoryBudget)
 	}
 }
+
+// TestProjectMessages_P0FloodObeysHardCeiling verifies the Def.7 hard ceiling:
+// P0 messages bypass the soft budget but a flood cannot exceed
+// soft*budgetHardMultiplier, so one agent can't inflate a peer's boot payload
+// without bound. The single most-important P0 still always surfaces.
+func TestProjectMessages_P0FloodObeysHardCeiling(t *testing.T) {
+	var msgs []models.Message
+	for i := 0; i < 200; i++ {
+		msgs = append(msgs, models.Message{
+			ID: "m", From: "attacker", Priority: "P0",
+			Content: strings.Repeat("x", 400),
+		})
+	}
+	const soft = 6000
+	out := projectMessages(msgs, soft)
+
+	total := 0
+	for _, s := range out {
+		total += messageSummaryBytes(s)
+	}
+	hardCeil := soft * budgetHardMultiplier
+	// Allow one item of slack: the first item is always admitted even if it
+	// alone would exceed the ceiling.
+	if total > hardCeil+700 {
+		t.Fatalf("P0 flood exceeded hard ceiling: %d > %d", total, hardCeil)
+	}
+	if len(out) >= len(msgs) {
+		t.Fatalf("expected the hard ceiling to drop most of the %d P0 messages, kept %d", len(msgs), len(out))
+	}
+	if len(out) == 0 {
+		t.Fatal("at least the most-important P0 must surface")
+	}
+}
+
+// TestProjectTasks_P0FloodObeysHardCeiling mirrors the message test for tasks.
+func TestProjectTasks_P0FloodObeysHardCeiling(t *testing.T) {
+	var tasks []models.Task
+	for i := 0; i < 200; i++ {
+		tasks = append(tasks, models.Task{
+			ID: "t", Title: "crit", Priority: "P0", Status: "pending",
+			Description: strings.Repeat("x", 400),
+		})
+	}
+	const soft = 8000
+	out := projectTasks(tasks, soft)
+	total := 0
+	for _, s := range out {
+		total += taskSummaryBytes(s)
+	}
+	if total > soft*budgetHardMultiplier+700 {
+		t.Fatalf("P0 task flood exceeded hard ceiling: %d", total)
+	}
+	if len(out) >= len(tasks) || len(out) == 0 {
+		t.Fatalf("hard ceiling should bound P0 tasks, kept %d of %d", len(out), len(tasks))
+	}
+}
