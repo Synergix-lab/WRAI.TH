@@ -44,6 +44,65 @@ func (d *DB) InsertMessage(project, from, to, msgType, subject, content, metadat
 	return msg, nil
 }
 
+// InsertMessageWithDeliveries inserts a message and its delivery rows in a
+// single transaction. The inbox reads the deliveries table, so a message
+// inserted without its deliveries (a crash or error between the two writes) is
+// silently never delivered. recipients is the already-resolved fan-out list
+// (one entry for a direct send, every active peer for a broadcast). Notifying
+// recipients and team-inbox bookkeeping stay outside — they are best-effort.
+func (d *DB) InsertMessageWithDeliveries(project, from, to, msgType, subject, content, metadata, priority string, ttlSeconds int, replyTo, conversationID *string, recipients []string) (*models.Message, error) {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
+	if priority == "" {
+		priority = "P2"
+	}
+	if ttlSeconds < 0 {
+		ttlSeconds = 14400
+	}
+
+	msg := &models.Message{
+		ID:             uuid.New().String(),
+		From:           from,
+		To:             to,
+		ReplyTo:        replyTo,
+		Type:           msgType,
+		Subject:        subject,
+		Content:        normalize.JSONKeys(content),
+		Metadata:       normalize.JSONKeys(metadata),
+		CreatedAt:      now,
+		ConversationID: conversationID,
+		Project:        project,
+		Priority:       priority,
+		TTLSeconds:     ttlSeconds,
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	if _, err := tx.Exec(
+		"INSERT INTO messages (id, from_agent, to_agent, reply_to, type, subject, content, metadata, created_at, conversation_id, project, priority, ttl_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		msg.ID, msg.From, msg.To, msg.ReplyTo, msg.Type, msg.Subject, msg.Content, msg.Metadata, msg.CreatedAt, msg.ConversationID, msg.Project, msg.Priority, msg.TTLSeconds,
+	); err != nil {
+		return nil, fmt.Errorf("insert message: %w", err)
+	}
+
+	for i, agent := range recipients {
+		if _, err := tx.Exec(
+			"INSERT INTO deliveries (id, message_id, to_agent, state, sequence_number, created_at, project) VALUES (?, ?, ?, 'queued', ?, ?, ?)",
+			uuid.New().String(), msg.ID, agent, i, now, project,
+		); err != nil {
+			return nil, fmt.Errorf("create delivery for %s: %w", agent, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit message+deliveries: %w", err)
+	}
+	return msg, nil
+}
+
 // InboxFilter holds optional filtering parameters for get_inbox.
 type InboxFilter struct {
 	MinPriority       string // e.g. "P1" — only messages with priority <= this

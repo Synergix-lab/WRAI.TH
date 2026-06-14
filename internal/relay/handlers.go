@@ -212,13 +212,9 @@ func (h *Handlers) sendCrossProject(ctx context.Context, srcProject, from, dstPr
 	// Insert the message in the DESTINATION project scope — this is what makes
 	// it visible in the recipient's get_inbox(project=dstProject) without any
 	// special routing in the read path.
-	msg, err := h.db.InsertMessage(dstProject, from, to, msgType, subject, content, string(metaBytes), priority, ttlSeconds, replyTo, nil)
+	msg, err := h.db.InsertMessageWithDeliveries(dstProject, from, to, msgType, subject, content, string(metaBytes), priority, ttlSeconds, replyTo, nil, []string{to})
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to insert cross-project message: %v", err)), nil
-	}
-	// Delivery for the single recipient in the destination project
-	if err := h.db.CreateDeliveries(msg.ID, dstProject, []string{to}); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("delivery failed: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("failed to send cross-project message: %v", err)), nil
 	}
 
 	// Push notification if the target has an open session

@@ -17,18 +17,30 @@ type DB struct {
 	path   string
 }
 
-func New() (*DB, error) {
+// resolveDBPath returns the database file path. RELAY_DB overrides the default
+// (~/.agent-relay/relay.db) — set it in dev / CI / tests so a local `agent-relay`
+// run never opens (and migrates) the production database. This is the guard
+// against the footgun where a dev `agent-relay send` mutates prod.
+func resolveDBPath() (string, error) {
+	if p := os.Getenv("RELAY_DB"); p != "" {
+		return p, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("get home dir: %w", err)
+		return "", fmt.Errorf("get home dir: %w", err)
+	}
+	return filepath.Join(home, ".agent-relay", "relay.db"), nil
+}
+
+func New() (*DB, error) {
+	dbPath, err := resolveDBPath()
+	if err != nil {
+		return nil, err
 	}
 
-	dbDir := filepath.Join(home, ".agent-relay")
-	if err := os.MkdirAll(dbDir, 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
-
-	dbPath := filepath.Join(dbDir, "relay.db")
 
 	// Writer pool: single connection serializes writes at Go level (SQLite only allows 1 writer).
 	writer, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=10000&_synchronous=NORMAL&_cache_size=-20000&_foreign_keys=ON&_txlock=immediate")
@@ -97,13 +109,10 @@ func (d *DB) GetHealthStats() map[string]int64 {
 	return stats
 }
 
-// DBPath returns the default database path without opening it.
+// DBPath returns the database path (RELAY_DB override or default) without
+// opening it.
 func DBPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".agent-relay", "relay.db"), nil
+	return resolveDBPath()
 }
 
 // NewReadOnly opens the database in read-only mode for CLI queries.
