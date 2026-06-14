@@ -2,11 +2,47 @@ package db
 
 import (
 	"agent-relay/internal/models"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// FindCollisions returns files claimed by two or more distinct agents at once —
+// the cases the orchestrator must resolve. Built on the active-lock set.
+func (d *DB) FindCollisions(project string) ([]models.FileCollision, error) {
+	locks, err := d.ListFileLocks(project)
+	if err != nil {
+		return nil, err
+	}
+	byFile := map[string][]string{} // file → distinct agents holding it
+	for _, l := range locks {
+		var paths []string
+		_ = json.Unmarshal([]byte(l.FilePaths), &paths)
+		for _, p := range paths {
+			seen := false
+			for _, a := range byFile[p] {
+				if a == l.AgentName {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				byFile[p] = append(byFile[p], l.AgentName)
+			}
+		}
+	}
+	out := []models.FileCollision{}
+	for file, agents := range byFile {
+		if len(agents) >= 2 {
+			out = append(out, models.FileCollision{File: file, Agents: agents})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].File < out[j].File })
+	return out, nil
+}
 
 // ClaimFiles creates a file lock for the given agent and file paths.
 func (d *DB) ClaimFiles(project, agentName, filePaths string, ttlSeconds int) (*models.FileLock, error) {

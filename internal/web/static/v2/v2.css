@@ -709,3 +709,31 @@ button { font-family: inherit; }
 .as-actions .as-save { border-color: var(--accent, #4ade80); color: var(--accent, #4ade80); }
 .as-actions button:hover { background: #1b2029; }
 .as-status { font-size: 12px; color: var(--muted, #6b7385); }
+
+/* ============================================================= *
+ *  Coordination layer — file collision radar (overview card)
+ * ============================================================= */
+.coord-body { display: flex; flex-direction: column; gap: 6px; }
+.coord-row {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 12px; padding: 5px 8px; border-radius: 6px;
+  background: var(--bg-elev);
+}
+.coord-row.collision {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+}
+.coord-warn { color: var(--red); flex-shrink: 0; }
+.coord-file { color: var(--text); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coord-agents { display: flex; gap: 3px; flex-shrink: 0; }
+.coord-ag {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; color: #06120c;
+}
+.coord-claim { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.coord-path {
+  font-size: 11px; color: var(--text-muted);
+  background: var(--bg-card); border: 1px solid var(--border-soft);
+  padding: 1px 6px; border-radius: 4px;
+}

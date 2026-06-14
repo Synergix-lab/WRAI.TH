@@ -40,6 +40,8 @@ export const api = {
   stats: (project, cycle) => getJSON(`/api/stats?${q({ project, cycle })}`),
   events: (project, limit = 50) =>
     getJSON(`/api/events/recent?${q({ project, limit })}`),
+  fileLocks: (project) => getJSON(`/api/file-locks?${q({ project })}`),
+  collisions: (project) => getJSON(`/api/collisions?${q({ project })}`),
   // mutations (native projects only)
   transition: (id, body) =>
     sendJSON('POST', `/api/tasks/${encodeURIComponent(id)}/transition`, body),

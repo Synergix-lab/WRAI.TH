@@ -30,6 +30,7 @@ var toolCategories = []struct{ name, summary string }{
 	{"agents", "agent lifecycle: list, deactivate, delete, sleep"},
 	{"teams", "teams + orgs: create, list, members, notify channels"},
 	{"projects", "project lifecycle: create_project, delete_project"},
+	{"locks", "file coordination: claim_files, release_files, list_locks (declare intent, avoid collisions)"},
 }
 
 // toolRegistry is the single source of truth for every MCP tool the relay
@@ -102,12 +103,13 @@ func (h *Handlers) toolRegistry() []registeredTool {
 		{server.ServerTool{Tool: removeTeamMemberTool(), Handler: h.HandleRemoveTeamMember}, "teams"},
 		{server.ServerTool{Tool: addNotifyChannelTool(), Handler: h.HandleAddNotifyChannel}, "teams"},
 
-		// File locks disabled: worktree isolation + merge conflicts replace
-		// advisory locks. Re-enable by uncommenting if a workflow ever needs
-		// cross-worktree file claims.
-		// {server.ServerTool{Tool: claimFilesTool(), Handler: h.HandleClaimFiles}, "locks"},
-		// {server.ServerTool{Tool: releaseFilesTool(), Handler: h.HandleReleaseFiles}, "locks"},
-		// {server.ServerTool{Tool: listLocksTool(), Handler: h.HandleListLocks}, "locks"},
+		// File coordination (collision guard): agents declare intent on files so
+		// the fleet avoids editing the same paths. Advisory — claim_files surfaces
+		// overlapping claims rather than hard-refusing. Discovery-mode keeps these
+		// out of the always-on schema budget.
+		{server.ServerTool{Tool: claimFilesTool(), Handler: h.HandleClaimFiles}, "locks"},
+		{server.ServerTool{Tool: releaseFilesTool(), Handler: h.HandleReleaseFiles}, "locks"},
+		{server.ServerTool{Tool: listLocksTool(), Handler: h.HandleListLocks}, "locks"},
 
 		{server.ServerTool{Tool: createProjectTool(), Handler: h.HandleCreateProject}, "projects"},
 		{server.ServerTool{Tool: deleteProjectTool(), Handler: h.HandleDeleteProject}, "projects"},

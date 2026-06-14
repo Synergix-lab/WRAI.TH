@@ -89,6 +89,8 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 	// File locks
 	case path == "/file-locks" && req.Method == http.MethodGet:
 		r.apiGetFileLocks(w, req)
+	case path == "/collisions" && req.Method == http.MethodGet:
+		r.apiGetCollisions(w, req)
 	// Task endpoints
 	case path == "/tasks/human" && req.Method == http.MethodGet:
 		r.apiGetHumanTasks(w, req)
@@ -1531,6 +1533,20 @@ func (r *Relay) apiGetFileLocks(w http.ResponseWriter, req *http.Request) {
 		locks = []models.FileLock{}
 	}
 	writeJSON(w, locks)
+}
+
+// apiGetCollisions returns files claimed by 2+ agents at once — the collision radar.
+func (r *Relay) apiGetCollisions(w http.ResponseWriter, req *http.Request) {
+	project := req.URL.Query().Get("project")
+	if project == "" {
+		project = "default"
+	}
+	cols, err := r.DB.FindCollisions(project)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "failed to find collisions", err)
+		return
+	}
+	writeJSON(w, cols)
 }
 
 // --- Token Usage API ---

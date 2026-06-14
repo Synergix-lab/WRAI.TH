@@ -9,3 +9,10 @@ type FileLock struct {
 	ReleasedAt *string `json:"released_at,omitempty"`
 	TTLSeconds int     `json:"ttl_seconds"`
 }
+
+// FileCollision is a single file claimed by two or more agents at once — the
+// coordination radar's red flag.
+type FileCollision struct {
+	File   string   `json:"file"`
+	Agents []string `json:"agents"`
+}

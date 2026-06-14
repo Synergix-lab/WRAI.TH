@@ -377,6 +377,32 @@ function overviewPage(ctx) {
       }
     } catch (_) { /* keep existing */ }
     renderFeed(false);
+    renderCoord();
+  }
+
+  // File coordination radar — who's editing what, collisions flagged loud.
+  async function renderCoord() {
+    const card = $('coordCard');
+    if (!card) return;
+    if (selection === 'all') { card.hidden = true; return; }
+    let locks = [], cols = [];
+    try { [locks, cols] = await Promise.all([api.fileLocks(selection), api.collisions(selection)]); }
+    catch (_) { card.hidden = true; return; }
+    locks = Array.isArray(locks) ? locks : [];
+    cols = Array.isArray(cols) ? cols : [];
+    if (!locks.length) { card.hidden = true; return; }
+    card.hidden = false;
+    $('coordMeta').textContent = cols.length
+      ? `${cols.length} collision${cols.length === 1 ? '' : 's'}`
+      : `${locks.length} active claim${locks.length === 1 ? '' : 's'}`;
+    const collisionRows = cols.map((c) =>
+      `<div class="coord-row collision"><span class="coord-warn" aria-hidden="true">⚠</span><span class="coord-file">${esc(c.file)}</span><span class="coord-agents">${c.agents.map((a) => `<span class="coord-ag" style="background:${colorFor(a)}" title="${esc(a)}">${esc(initialFor(a))}</span>`).join('')}</span></div>`).join('');
+    const claimRows = locks.map((l) => {
+      let paths = [];
+      try { paths = JSON.parse(l.file_paths || '[]'); } catch (_) { /* */ }
+      return `<div class="coord-row"><span class="coord-ag" style="background:${colorFor(l.agent_name)}" title="${esc(l.agent_name)}">${esc(initialFor(l.agent_name))}</span><span class="coord-claim">${paths.map((p) => `<span class="coord-path">${esc(p)}</span>`).join('')}</span></div>`;
+    }).join('');
+    $('coordBody').innerHTML = (collisionRows || '') + claimRows;
   }
 
   ctx.onEvent((evt) => {
