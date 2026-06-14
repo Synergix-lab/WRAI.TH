@@ -443,6 +443,23 @@ download_prebuilt() {
   fi
   spinner_stop
 
+  # Verify integrity against the release SHA256SUMS before extracting. Fail
+  # closed on mismatch; only skip when the sums file is absent (older releases).
+  local sums_url="https://github.com/${REPO}/releases/download/${version}/SHA256SUMS"
+  if curl -fsSL "$sums_url" -o "$tmpdir/SHA256SUMS" 2>/dev/null; then
+    local sha_cmd="sha256sum"
+    command -v sha256sum >/dev/null 2>&1 || sha_cmd="shasum -a 256"
+    local got
+    got=$($sha_cmd "$tmpdir/archive.tar.gz")
+    got="${got%% *}"
+    if ! grep -q "$got" "$tmpdir/SHA256SUMS"; then
+      rm -rf "$tmpdir"
+      die "Checksum mismatch for ${archive_name} - refusing to install (possible tampering)."
+    fi
+  else
+    warn "SHA256SUMS not published for ${version} - skipping integrity check"
+  fi
+
   tar -xzf "$tmpdir/archive.tar.gz" -C "$tmpdir"
   install -m 755 "$tmpdir/agent-relay" "$bin_path"
 

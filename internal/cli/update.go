@@ -1,8 +1,15 @@
 package cli
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bufio"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -286,8 +293,13 @@ func tryDownloadUpdate(binPath, version string) bool {
 	osName := runtime.GOOS
 	arch := runtime.GOARCH
 
-	archiveName := fmt.Sprintf("agent-relay-%s-%s.tar.gz", osName, arch)
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, version, archiveName)
+	// Windows ships a .zip; every other platform a .tar.gz.
+	ext := "tar.gz"
+	if osName == "windows" {
+		ext = "zip"
+	}
+	archiveName := fmt.Sprintf("agent-relay-%s-%s.%s", osName, arch, ext)
+	base := fmt.Sprintf("https://github.com/%s/releases/download/%s", repo, version)
 
 	tmpDir, err := os.MkdirTemp("", "agent-relay-dl-*")
 	if err != nil {
@@ -297,20 +309,153 @@ func tryDownloadUpdate(binPath, version string) bool {
 
 	fmt.Print("  downloading... ")
 	archivePath := filepath.Join(tmpDir, archiveName)
-	cmd := exec.Command("curl", "-fsSL", "-o", archivePath, url)
-	if err := cmd.Run(); err != nil {
+	if err := download(archivePath, base+"/"+archiveName); err != nil {
 		fmt.Println("failed")
 		return false
 	}
 	fmt.Println("ok")
 
-	// Extract
-	cmd = exec.Command("tar", "-xzf", archivePath, "-C", tmpDir)
-	if err := cmd.Run(); err != nil {
+	// Integrity: verify the archive against the release's SHA256SUMS before
+	// extracting/installing. Fail closed on mismatch; only skip when the sums
+	// file is absent (older releases that predate signing).
+	sumsPath := filepath.Join(tmpDir, "SHA256SUMS")
+	if err := download(sumsPath, base+"/SHA256SUMS"); err != nil {
+		fmt.Println("  warning: SHA256SUMS not published for this release — skipping integrity check")
+	} else {
+		ok, err := verifyChecksum(archivePath, archiveName, sumsPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  error: checksum check failed: %v\n", err)
+			return false
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "  error: checksum mismatch — refusing to install (possible tampering)")
+			return false
+		}
+		fmt.Println("  checksum verified")
+	}
+
+	if err := extractArchive(archivePath, tmpDir); err != nil {
+		fmt.Fprintf(os.Stderr, "  error: extract failed: %v\n", err)
 		return false
 	}
 
-	return installBinary(filepath.Join(tmpDir, binaryName), binPath)
+	extracted := filepath.Join(tmpDir, binaryName)
+	if osName == "windows" {
+		extracted += ".exe"
+	}
+	return installBinary(extracted, binPath)
+}
+
+// download fetches url to dst with curl (already a dependency of the updater).
+func download(dst, url string) error {
+	return exec.Command("curl", "-fsSL", "-o", dst, url).Run()
+}
+
+// verifyChecksum compares the SHA-256 of file against the entry for name in a
+// `sha256sum`-format SHA256SUMS file ("<hex>  <name>" per line).
+func verifyChecksum(file, name, sumsPath string) (bool, error) {
+	sums, err := os.Open(sumsPath)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = sums.Close() }()
+
+	want := ""
+	sc := bufio.NewScanner(sums)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) == 2 && filepath.Base(fields[1]) == name {
+			want = strings.ToLower(fields[0])
+			break
+		}
+	}
+	if want == "" {
+		return false, fmt.Errorf("no checksum entry for %s", name)
+	}
+
+	af, err := os.Open(file)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = af.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, af); err != nil {
+		return false, err
+	}
+	return hex.EncodeToString(h.Sum(nil)) == want, nil
+}
+
+// extractArchive extracts files from a .tar.gz or .zip into destDir using the
+// Go stdlib — no external tar/unzip, which stock Windows lacks. Entry names are
+// flattened to their base to prevent path traversal (zip-slip).
+func extractArchive(archivePath, destDir string) error {
+	if strings.HasSuffix(archivePath, ".zip") {
+		return extractZip(archivePath, destDir)
+	}
+	return extractTarGz(archivePath, destDir)
+}
+
+func extractTarGz(archivePath, destDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		if err := writeExtracted(filepath.Join(destDir, filepath.Base(hdr.Name)), tr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractZip(archivePath, destDir string) error {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	for _, zf := range r.File {
+		if zf.FileInfo().IsDir() {
+			continue
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			return err
+		}
+		err = writeExtracted(filepath.Join(destDir, filepath.Base(zf.Name)), rc)
+		_ = rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeExtracted(dst string, src io.Reader) error {
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	_, err = io.Copy(out, src) //nolint:gosec // size-bounded by our own release archive
+	return err
 }
 
 func installBinary(src, dst string) bool {
