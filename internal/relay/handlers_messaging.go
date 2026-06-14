@@ -92,24 +92,25 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 			return mcp.NewToolResultError(fmt.Sprintf("team '%s' not found", teamSlug)), nil
 		}
 
-		msg, err := h.db.InsertMessage(project, from, to, msgType, subject, content, metadata, priority, ttlSeconds, replyTo, conversationID)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to send message: %v", err)), nil
-		}
-
-		// Add to team inbox
-		_ = h.db.AddToTeamInbox(team.ID, msg.ID)
-
-		// Create deliveries for team members
+		// Resolve team recipients first, then insert message + deliveries atomically.
 		members, _ := h.db.GetTeamMemberNames(team.ID)
 		var recipients []string
 		for _, member := range members {
 			if member != from {
 				recipients = append(recipients, member)
-				h.registry.Notify(project, member, from, subject, msg.ID)
 			}
 		}
-		_ = h.db.CreateDeliveries(msg.ID, project, recipients)
+
+		msg, err := h.db.InsertMessageWithDeliveries(project, from, to, msgType, subject, content, metadata, priority, ttlSeconds, replyTo, conversationID, recipients)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to send message: %v", err)), nil
+		}
+
+		// Best-effort bookkeeping + notifications after the durable write.
+		_ = h.db.AddToTeamInbox(team.ID, msg.ID)
+		for _, member := range recipients {
+			h.registry.Notify(project, member, from, subject, msg.ID)
+		}
 
 		return h.resultJSONTracked(project, from, "send_message", msg)
 	}
@@ -125,14 +126,13 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		}
 	}
 
-	msg, err := h.db.InsertMessage(project, from, to, msgType, subject, content, metadata, priority, ttlSeconds, replyTo, conversationID)
+	// Resolve fan-out recipients first, then insert message + deliveries atomically
+	// so a message can never be persisted without its deliveries (silent non-delivery).
+	recipients, _ := h.db.ResolveRecipients(project, to, from, conversationID)
+	msg, err := h.db.InsertMessageWithDeliveries(project, from, to, msgType, subject, content, metadata, priority, ttlSeconds, replyTo, conversationID, recipients)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to send message: %v", err)), nil
 	}
-
-	// Create deliveries
-	recipients, _ := h.db.ResolveRecipients(project, to, from, conversationID)
-	_ = h.db.CreateDeliveries(msg.ID, project, recipients)
 
 	// Push notification
 	if conversationID != nil {

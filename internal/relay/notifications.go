@@ -316,12 +316,11 @@ func (n *Notifier) doMessage(rule models.NotificationRule, project string, paylo
 
 	var sent int
 	for _, to := range recipients {
-		msg, err := n.db.InsertMessage(project, "notifier", to, "notification", subject, content, meta, priority, ttl, nil, nil)
+		msg, err := n.db.InsertMessageWithDeliveries(project, "notifier", to, "notification", subject, content, meta, priority, ttl, nil, nil, []string{to})
 		if err != nil {
 			rec.Error = err.Error()
 			continue
 		}
-		_ = n.db.CreateDeliveries(msg.ID, project, []string{to})
 		n.registry.Notify(project, to, "notifier", subject, msg.ID)
 		sent++
 	}
