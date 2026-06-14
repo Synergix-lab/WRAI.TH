@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -69,9 +71,22 @@ func startServer() {
 	r := relay.New(database, ingester, cfg)
 	r.Version = Version
 
-	addr := ":8090"
+	// Bind loopback-only by default. RELAY_BIND overrides the host (e.g.
+	// "0.0.0.0" to expose on the LAN); PORT overrides the port.
+	host := os.Getenv("RELAY_BIND")
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := "8090"
 	if v := os.Getenv("PORT"); v != "" {
-		addr = ":" + v
+		port = v
+	}
+	addr := net.JoinHostPort(host, port)
+
+	// Refuse to expose a non-loopback bind without authentication — otherwise the
+	// entire API/MCP surface is open to everything on the network.
+	if !isLoopbackHost(host) && cfg.APIKey == "" {
+		log.Fatalf("refusing to bind %s without auth: set RELAY_API_KEY to expose on a non-loopback address, or unset RELAY_BIND to bind 127.0.0.1", addr)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -116,7 +131,7 @@ func startServer() {
 		authStatus, corsStatus, cfg.MaxBody, rateLimitStatus)
 
 	go func() {
-		log.Printf("listening on %s (UI: http://localhost%s)", addr, addr)
+		log.Printf("listening on %s (UI: http://localhost:%s)", addr, port)
 		if err := r.ListenAndServe(addr); err != nil {
 			log.Printf("server stopped: %v", err)
 		}
@@ -132,4 +147,17 @@ func startServer() {
 	if err := r.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown error: %v", err)
 	}
+}
+
+// isLoopbackHost reports whether a bind host is loopback-only (safe to serve
+// without auth). Anything else exposes the relay beyond the local machine.
+func isLoopbackHost(h string) bool {
+	switch strings.ToLower(strings.Trim(h, "[]")) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
