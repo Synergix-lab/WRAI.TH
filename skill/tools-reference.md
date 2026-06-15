@@ -1,4 +1,4 @@
-# MCP Tools Reference (61 tools)
+# MCP Tools Reference (58 tools, + discover_tools/call_tool in discovery mode)
 
 ## Auth (only when RELAY_API_KEY is set)
 
