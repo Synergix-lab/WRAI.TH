@@ -57,12 +57,38 @@
         <div class="home-hero">
           <div class="home-hero-text">
             <h1 class="home-title">mission control</h1>
-            <p class="home-sub">you're directing a fleet now, not babysitting one chat. every project is a crew — drop in to see who's shipping, who's blocked, and what just landed.</p>
+            <p class="home-sub">direct the fleet — golden signals, live throughput, and the crews that need you, across every project.</p>
             <a class="fleet-comms-link" href="#/messages">fleet comms — message any agent, any project →</a>
           </div>
-          <div class="home-agg" id="homeAgg" aria-label="All-projects summary"></div>
         </div>
-        <div class="bento" id="bento" aria-label="Projects"></div>
+
+        <div class="fleet-ticker" id="fleetTicker" aria-label="Live activity" hidden></div>
+
+        <div class="mc-kpis" id="mcKpis" aria-label="Fleet signals"></div>
+
+        <section class="card mc-pulse" aria-label="Fleet throughput">
+          <div class="card-head">
+            <span class="card-label">fleet throughput · 30d</span>
+            <span class="card-meta" id="pulseMeta"></span>
+          </div>
+          <div class="pulse-wrap" id="pulseWrap"></div>
+        </section>
+
+        <section class="fleet-section" id="attnSection" hidden aria-label="Crews that need attention">
+          <div class="fleet-shead">
+            <span class="fs-title sev-red">needs attention</span>
+            <span class="fs-count" id="attnCount"></span>
+          </div>
+          <div class="attn-list" id="attnList"></div>
+        </section>
+
+        <section class="fleet-section" aria-label="Fleet">
+          <div class="fleet-shead">
+            <span class="fs-title">fleet</span>
+            <span class="fs-count" id="fleetCount"></span>
+          </div>
+          <div class="bento" id="bento" aria-label="Projects"></div>
+        </section>
       </section>
 
       <!-- ============ OVERVIEW ============ -->

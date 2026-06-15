@@ -37,6 +37,8 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiHealth(w)
 	case path == "/projects" && req.Method == http.MethodGet:
 		r.apiGetProjects(w)
+	case path == "/fleet/throughput" && req.Method == http.MethodGet:
+		r.apiFleetThroughput(w, req)
 	case strings.HasPrefix(path, "/projects/") && req.Method == http.MethodDelete:
 		r.apiDeleteProject(w, strings.TrimPrefix(path, "/projects/"))
 	case strings.HasPrefix(path, "/projects/") && req.Method == http.MethodPatch:
@@ -201,6 +203,30 @@ func (r *Relay) apiGetProjects(w http.ResponseWriter) {
 		projects = []models.ProjectInfo{}
 	}
 	writeJSON(w, projects)
+}
+
+// apiFleetThroughput returns a fleet-wide daily throughput series (done +
+// dispatched per day) for the mission control pulse chart. ?days= (default 30,
+// clamped 1..90).
+func (r *Relay) apiFleetThroughput(w http.ResponseWriter, req *http.Request) {
+	days := 30
+	if v := req.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
+	if days > 90 {
+		days = 90
+	}
+	buckets, err := r.DB.FleetThroughput(days)
+	if err != nil {
+		http.Error(w, `{"error":"failed to compute throughput"}`, http.StatusInternalServerError)
+		return
+	}
+	if buckets == nil {
+		buckets = []models.DayBucket{}
+	}
+	writeJSON(w, buckets)
 }
 
 func (r *Relay) apiHealth(w http.ResponseWriter) {
