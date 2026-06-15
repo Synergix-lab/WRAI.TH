@@ -129,7 +129,9 @@ func (d *DB) ListProjectsWithInfo() ([]models.ProjectInfo, error) {
 			COALESCE(tc.total_tasks, 0),
 			COALESCE(tc.active_tasks, 0),
 			COALESCE(tc.done_tasks, 0),
-			COALESCE(tu.tokens_24h, 0)
+			COALESCE(tc.blocked_tasks, 0),
+			COALESCE(tu.tokens_24h, 0),
+			COALESCE(tc.last_activity, '')
 		FROM projects p
 		LEFT JOIN (
 			SELECT project, COUNT(*) as agent_count,
@@ -139,8 +141,10 @@ func (d *DB) ListProjectsWithInfo() ([]models.ProjectInfo, error) {
 		) ac ON ac.project = p.name
 		LEFT JOIN (
 			SELECT project, COUNT(*) as total_tasks,
-				SUM(CASE WHEN status IN ('accepted', 'in-progress') THEN 1 ELSE 0 END) as active_tasks,
-				SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_tasks
+				SUM(CASE WHEN status IN ('accepted', 'in-progress', 'in-review') THEN 1 ELSE 0 END) as active_tasks,
+				SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_tasks,
+				SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_tasks,
+				MAX(COALESCE(completed_at, started_at, accepted_at, dispatched_at)) as last_activity
 			FROM tasks GROUP BY project
 		) tc ON tc.project = p.name
 		LEFT JOIN (
@@ -157,7 +161,7 @@ func (d *DB) ListProjectsWithInfo() ([]models.ProjectInfo, error) {
 	var projects []models.ProjectInfo
 	for rows.Next() {
 		var p models.ProjectInfo
-		if err := rows.Scan(&p.Name, &p.PlanetType, &p.CreatedAt, &p.AgentCount, &p.OnlineCount, &p.TotalTasks, &p.ActiveTasks, &p.DoneTasks, &p.Tokens24h); err != nil {
+		if err := rows.Scan(&p.Name, &p.PlanetType, &p.CreatedAt, &p.AgentCount, &p.OnlineCount, &p.TotalTasks, &p.ActiveTasks, &p.DoneTasks, &p.BlockedTasks, &p.Tokens24h, &p.LastActivity); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)

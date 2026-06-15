@@ -33,6 +33,10 @@ export const api = {
   cycles: (project) => getJSON(`/api/cycles?${q({ project })}`),
   profiles: (project) => getJSON(`/api/profiles?${q({ project })}`),
   agents: (project) => getJSON(`/api/agents?${q({ project })}`),
+  agentsAll: () => getJSON('/api/agents/all'),
+  tasksAll: () => getJSON('/api/tasks/all'),
+  fleetThroughput: (days = 30) => getJSON(`/api/fleet/throughput?${q({ days })}`),
+  liveActivity: () => getJSON('/api/activity'),
   messagesLatest: (project, since) =>
     getJSON(`/api/messages/latest?${q({ project, since })}`),
   progress: (id, project) =>
