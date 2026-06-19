@@ -7,13 +7,26 @@ import (
 	"time"
 )
 
+// DefaultMaxBody is the request body cap applied when RELAY_MAX_BODY is unset.
+// 1 MiB comfortably exceeds any legitimate tool call (messages are capped at
+// max_context_bytes) while blocking memory-exhaustion via oversized payloads.
+const DefaultMaxBody int64 = 1 << 20
+
 // Config holds server security settings loaded from environment variables.
-// All settings are opt-in — zero values preserve backward-compatible behavior.
+// MaxBody defaults to DefaultMaxBody; the rest are opt-in (zero values preserve
+// backward-compatible behavior).
 type Config struct {
 	APIKey      string   // RELAY_API_KEY: shared secret for Bearer auth
 	CORSOrigins []string // RELAY_CORS_ORIGINS: allowed origins (comma-separated)
-	MaxBody     int64    // RELAY_MAX_BODY: max request body in bytes
-	RateLimit   int      // RELAY_RATE_LIMIT: requests/minute per IP
+	MaxBody     int64    // RELAY_MAX_BODY: max request body in bytes (default 1 MiB; 0 disables)
+	RateLimit   int      // RELAY_RATE_LIMIT: requests/minute per IP (opt-in; 0 = off)
+
+	// RequireRegistered (RELAY_REQUIRE_REGISTERED) rejects mutating tool calls
+	// whose acting agent is "anonymous" or not registered in the project. Opt-in
+	// (default off) — the loopback trust model still treats the declared `as`/
+	// ?agent= identity as authoritative; this only stops silent anonymous and
+	// typo'd writes from polluting the bus. Reads and register_agent stay open.
+	RequireRegistered bool // RELAY_REQUIRE_REGISTERED
 
 	// LinearMode toggles Linear-SSOT mirror mode. Default false = degraded/native
 	// mode (tasks live in the relay DB, kanban is writable). Surfaced via
@@ -58,8 +71,10 @@ func Load() Config {
 		}
 	}
 
+	cfg.MaxBody = DefaultMaxBody
 	if v := os.Getenv("RELAY_MAX_BODY"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+		// Explicit 0 opts out of the cap (unlimited); negatives are ignored.
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
 			cfg.MaxBody = n
 		}
 	}
@@ -72,6 +87,10 @@ func Load() Config {
 
 	if v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LINEAR_MODE"))); v == "1" || v == "true" || v == "yes" {
 		cfg.LinearMode = true
+	}
+
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_REQUIRE_REGISTERED"))); v == "1" || v == "true" || v == "yes" {
+		cfg.RequireRegistered = true
 	}
 
 	cfg.LinearAPIKey = os.Getenv("LINEAR_API_KEY")

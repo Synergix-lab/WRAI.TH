@@ -126,9 +126,17 @@ func startServer() {
 	if cfg.RateLimit > 0 {
 		rateLimitStatus = fmt.Sprintf("%d/min", cfg.RateLimit)
 	}
+	bodyStatus := "unlimited"
+	if cfg.MaxBody > 0 {
+		bodyStatus = fmt.Sprintf("%dKB", cfg.MaxBody/1024)
+	}
+	requireReg := "off"
+	if cfg.RequireRegistered {
+		requireReg = "on"
+	}
 	log.Printf("agent-relay starting on %s", addr)
-	log.Printf("  auth: %s | cors: %s | max body: %dB | rate limit: %s",
-		authStatus, corsStatus, cfg.MaxBody, rateLimitStatus)
+	log.Printf("  auth: %s | cors: %s | max body: %s | rate limit: %s | require-registered: %s",
+		authStatus, corsStatus, bodyStatus, rateLimitStatus, requireReg)
 
 	go func() {
 		log.Printf("listening on %s (UI: http://localhost:%s)", addr, port)
