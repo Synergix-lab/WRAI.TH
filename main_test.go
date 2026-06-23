@@ -32,9 +32,10 @@ func TestIsAddrInUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer l.Close()
-	_, err2 := net.Listen("tcp", l.Addr().String())
+	defer func() { _ = l.Close() }()
+	l2, err2 := net.Listen("tcp", l.Addr().String())
 	if err2 == nil {
+		_ = l2.Close()
 		t.Fatal("expected second listen to fail")
 	}
 	if !isAddrInUse(err2) {
