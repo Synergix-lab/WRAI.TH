@@ -1,14 +1,14 @@
 #!/bin/bash
-EVENTS_DIR="$HOME/.pixel-office/events"
-mkdir -p "$EVENTS_DIR"
-
+# Stop → relay activity (agent turn ended → waiting for user). Fire-and-forget.
+# (Token usage from the transcript tail is POSTed here too — added in a later phase.)
+RELAY_URL="${RELAY_URL:-http://localhost:8090}"
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"')
+command -v jq >/dev/null 2>&1 || exit 0
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // ""')
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-FILENAME="$EVENTS_DIR/stop-$$-$(date +%s).json"
-TMP="$FILENAME.tmp"
-printf '{"type":"stop","session_id":"%s","tool":"","file":"","ts":"%s"}' \
-  "$SESSION_ID" "$TS" > "$TMP"
-mv "$TMP" "$FILENAME"
+[ -z "$SID" ] && exit 0
+PAYLOAD=$(jq -nc --arg s "$SID" --arg ts "$TS" '{session_id:$s, type:"stop", ts:$ts}')
+curl -fsS -m 2 -X POST "$RELAY_URL/api/ingest/activity" \
+  ${RELAY_API_KEY:+-H "Authorization: Bearer $RELAY_API_KEY"} \
+  -H "Content-Type: application/json" -d "$PAYLOAD" >/dev/null 2>&1 &
 exit 0
