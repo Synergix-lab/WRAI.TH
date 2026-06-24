@@ -69,3 +69,33 @@ func TestIngestActivityValidation(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+func TestIngestTokensBoundSession(t *testing.T) {
+	r := testRelay(t)
+	sid := "sess-tok"
+	if _, _, err := r.DB.RegisterAgent("proj", "dev", "dev", "", nil, nil, false, &sid, "[]", 0, db.RegisterOptions{}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	w := doAPI(r, "POST", "/ingest/tokens", `{"session_id":"sess-tok","input":100,"output":50,"cache_read":2000}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestIngestTokensUnboundSession(t *testing.T) {
+	r := testRelay(t)
+	w := doAPI(r, "POST", "/ingest/tokens", `{"session_id":"ghost","input":10}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for unbound session, got %d", w.Code)
+	}
+}
+
+func TestIngestTokensValidation(t *testing.T) {
+	r := testRelay(t)
+	if w := doAPI(r, "POST", "/ingest/tokens", `{"input":10}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing session_id, got %d", w.Code)
+	}
+	if w := doAPI(r, "POST", "/ingest/tokens", `{"session_id":"s"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for zero usage, got %d", w.Code)
+	}
+}

@@ -97,6 +97,8 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.handleIngestActivity(w, req)
 	case path == "/ingest/session-start" && req.Method == http.MethodPost:
 		r.handleIngestSessionStart(w, req)
+	case path == "/ingest/tokens" && req.Method == http.MethodPost:
+		r.handleIngestTokens(w, req)
 	// File locks
 	case path == "/file-locks" && req.Method == http.MethodGet:
 		r.apiGetFileLocks(w, req)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"agent-relay/internal/db"
 	"agent-relay/internal/ingest"
 )
 
@@ -21,6 +22,15 @@ type ingestActivityReq struct {
 	File      string `json:"file,omitempty"`
 	ParentID  string `json:"parent_id,omitempty"`
 	TS        string `json:"ts,omitempty"`
+}
+
+type ingestTokensReq struct {
+	SessionID     string `json:"session_id"`
+	Input         int    `json:"input"`
+	Output        int    `json:"output"`
+	CacheRead     int    `json:"cache_read"`
+	CacheCreation int    `json:"cache_creation"`
+	TS            string `json:"ts,omitempty"`
 }
 
 type ingestSessionStartReq struct {
@@ -44,6 +54,47 @@ func (r *Relay) handleIngestActivity(w http.ResponseWriter, req *http.Request) {
 	}
 	if r.Ingester != nil {
 		r.Ingester.RecordHookEvent(hookEventToAgentEvent(body))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleIngestTokens records real per-turn token usage read from the transcript
+// by the Stop hook, attributed to the agent bound to the session. Fire-and-forget.
+func (r *Relay) handleIngestTokens(w http.ResponseWriter, req *http.Request) {
+	var body ingestTokensReq
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		apiError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	if body.SessionID == "" {
+		apiError(w, http.StatusBadRequest, "session_id required", nil)
+		return
+	}
+	if body.Input == 0 && body.Output == 0 && body.CacheRead == 0 && body.CacheCreation == 0 {
+		w.WriteHeader(http.StatusNoContent) // nothing to record
+		return
+	}
+	project, agent, found, err := r.DB.GetAgentBySessionID(body.SessionID)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "attribution failed", err)
+		return
+	}
+	if !found {
+		// Unbound session (agent never registered with a cwd) — drop quietly.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Handlers != nil {
+		r.Handlers.RecordTokens(db.TokenRecord{
+			Project:       project,
+			Agent:         agent,
+			Tool:          "",
+			Input:         body.Input,
+			Output:        body.Output,
+			CacheRead:     body.CacheRead,
+			CacheCreation: body.CacheCreation,
+			CreatedAt:     body.TS,
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

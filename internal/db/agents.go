@@ -245,6 +245,25 @@ func (d *DB) GetAgent(project, name string) (*models.Agent, error) {
 	return &a, nil
 }
 
+// GetAgentBySessionID resolves the active agent bound to a Claude Code session.
+// Used to attribute hook-POSTed token usage. found=false when no agent owns it.
+func (d *DB) GetAgentBySessionID(sessionID string) (project, name string, found bool, err error) {
+	if sessionID == "" {
+		return "", "", false, nil
+	}
+	row := d.ro().QueryRow(
+		"SELECT project, name FROM agents WHERE session_id = ? AND status = 'active' LIMIT 1",
+		sessionID,
+	)
+	switch e := row.Scan(&project, &name); {
+	case e == sql.ErrNoRows:
+		return "", "", false, nil
+	case e != nil:
+		return "", "", false, fmt.Errorf("get agent by session: %w", e)
+	}
+	return project, name, true, nil
+}
+
 // SetAgentCwd records the worktree cwd for an agent — the stable key used to
 // re-bind a rotating Claude Code session_id on SessionStart. No-op if the agent
 // row doesn't exist yet.
