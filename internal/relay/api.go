@@ -92,6 +92,11 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiStreamEvents(w, req)
 	case path == "/events/recent" && req.Method == http.MethodGet:
 		r.apiGetRecentEvents(w, req)
+	// Hook-POST ingestion (Claude Code hooks → relay)
+	case path == "/ingest/activity" && req.Method == http.MethodPost:
+		r.handleIngestActivity(w, req)
+	case path == "/ingest/session-start" && req.Method == http.MethodPost:
+		r.handleIngestSessionStart(w, req)
 	// File locks
 	case path == "/file-locks" && req.Method == http.MethodGet:
 		r.apiGetFileLocks(w, req)

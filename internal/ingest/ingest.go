@@ -52,6 +52,14 @@ func New(cfg Config) (*Ingester, error) {
 	}, nil
 }
 
+// RecordHookEvent feeds an event that arrived over HTTP (a Claude Code hook
+// POSTing to the relay) into the in-memory detector — same path the file-drop
+// watcher used, minus the filesystem. Activity is ephemeral: it updates detector
+// state + broadcasts to SSE subscribers, and never touches the DB.
+func (i *Ingester) RecordHookEvent(evt AgentEvent) {
+	i.detector.RecordEvent(evt)
+}
+
 func (i *Ingester) GetSessions() []SessionState {
 	return i.detector.GetSessions()
 }
