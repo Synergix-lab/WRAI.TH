@@ -24,7 +24,7 @@ func TestDetector_TickEmitsNonBlocking(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		d.tick(time.Now())              // must return despite no reader on out
+		d.tick(time.Now()) // must return despite no reader on out
 		d.RecordEvent(AgentEvent{SessionID: "s2", Type: EventToolEnd, Timestamp: time.Now()})
 		_ = d.GetSessions()
 		close(done)
