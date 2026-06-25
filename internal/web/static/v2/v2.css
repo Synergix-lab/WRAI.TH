@@ -786,9 +786,16 @@ button { font-family: inherit; }
 .agent-node[data-state="active"] .an-status { background: var(--blue); animation: breathe 2s ease-in-out infinite; }
 .agent-node[data-state="idle"] .an-status { background: var(--text-dim); animation: breathe 3.6s ease-in-out infinite; }
 @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-.an-label { display: flex; flex-direction: column; align-items: center; gap: 1px; max-width: 92px; }
+.an-label { display: flex; flex-direction: column; align-items: center; gap: 1px; max-width: 92px; opacity: .6; transition: opacity .15s ease; }
 .an-name { font-size: 11px; color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 92px; }
-.an-role { font-size: 9px; color: var(--text-muted); letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 92px; }
+/* Role is collapsed by default — a single-line name keeps dense rings legible.
+   It reveals on hover/focus/active, and the node lifts above its neighbours so
+   the extra line isn't clipped. */
+.an-role { font-size: 9px; color: var(--text-muted); letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 92px; max-height: 0; opacity: 0; transition: max-height .15s ease, opacity .15s ease; }
+.agent-node { z-index: 1; }
+.agent-node:hover, .agent-node:focus-visible, .agent-node[data-state="active"] { z-index: 6; }
+.agent-node:hover .an-label, .agent-node:focus-visible .an-label, .agent-node[data-state="active"] .an-label { opacity: 1; }
+.agent-node:hover .an-role, .agent-node:focus-visible .an-role, .agent-node[data-state="active"] .an-role { max-height: 14px; opacity: 1; }
 .agent-node.ping .an-avatar { animation: nodePing .6s ease-out; }
 @keyframes nodePing {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 60%, transparent), 0 2px 10px rgba(0,0,0,.4); }

@@ -84,40 +84,92 @@ export function initTeam(root, ctx) {
   /* --------------------------- layout ----------------------------- */
   // Depth via reports_to chains (edges where both endpoints exist). Leaders sit
   // at the top; each level fans across a gentle arc → a constellation, not a grid.
+  // Radial hub-and-spoke. The largest org tree's root sits at the centre and its
+  // reports fan out on concentric rings; each branch owns an angular wedge sized
+  // by its leaf count, so a hub with many direct reports spreads collision-free
+  // instead of cramming into one row. Disconnected roots park along the top.
   function computeLayout() {
     pos.clear();
     if (!agents.length) return;
     const byName = new Map(agents.map((a) => [a.name, a]));
-    const depthOf = (a, seen = new Set()) => {
-      const rt = a.reports_to;
-      if (!rt || !byName.has(rt) || seen.has(a.name)) return 0;
-      seen.add(a.name);
-      return 1 + depthOf(byName.get(rt), seen);
-    };
-    const levels = new Map();
+    const parentOf = (a) =>
+      (a.reports_to && byName.has(a.reports_to) && a.reports_to !== a.name) ? a.reports_to : null;
+
+    const kids = new Map(agents.map((a) => [a.name, []]));
+    const roots = [];
     for (const a of agents) {
-      const d = depthOf(a);
-      if (!levels.has(d)) levels.set(d, []);
-      levels.get(d).push(a);
+      const p = parentOf(a);
+      if (p) kids.get(p).push(a.name);
+      else roots.push(a.name);
     }
-    const depths = [...levels.keys()].sort((x, y) => x - y);
-    const L = depths.length;
-    depths.forEach((d, li) => {
-      const row = levels.get(d).sort(rank);
-      const n = row.length;
-      row.forEach((a, i) => {
-        const frac = n === 1 ? 0.5 : i / (n - 1);
-        const x = 0.12 + frac * 0.76;
-        let y;
-        if (L === 1) {
-          // single tier → wide smile arc
-          y = 0.30 + Math.sin(frac * Math.PI) * 0.34;
-        } else {
-          const base = 0.17 + li / (L - 1) * 0.66;
-          y = base - Math.sin(frac * Math.PI) * 0.045;
-        }
-        pos.set(a.name, { nx: x, ny: y });
-      });
+    for (const arr of kids.values()) arr.sort((x, y) => rank(byName.get(x), byName.get(y)));
+
+    // Leaf count per node (min 1), cycle-guarded — drives angular wedge size.
+    const leaves = new Map();
+    const counting = new Set();
+    const leafCount = (name) => {
+      if (leaves.has(name)) return leaves.get(name);
+      if (counting.has(name)) return 1;
+      counting.add(name);
+      const c = kids.get(name) || [];
+      const n = c.length ? c.reduce((s, ch) => s + leafCount(ch), 0) : 1;
+      leaves.set(name, n);
+      return n;
+    };
+    roots.forEach(leafCount);
+    roots.sort((a, b) => leafCount(b) - leafCount(a));
+
+    const TAU = Math.PI * 2;
+    // Recursively place a subtree: node at (depth·step) along the mid-angle of its
+    // wedge [a0,a1); children split the wedge by leaf share.
+    const fan = (name, a0, a1, depth, cx, cy, rx, ry, step, placed) => {
+      const ang = (a0 + a1) / 2;
+      if (depth > 0) {
+        const rr = depth * step;
+        pos.set(name, { nx: cx + rx * rr * Math.cos(ang), ny: cy + ry * rr * Math.sin(ang) });
+      } else {
+        pos.set(name, { nx: cx, ny: cy });
+      }
+      const c = kids.get(name) || [];
+      if (!c.length || placed.has(name)) return;
+      placed.add(name);
+      const total = c.reduce((s, ch) => s + leafCount(ch), 0) || 1;
+      let a = a0;
+      for (const ch of c) {
+        const w = (a1 - a0) * (leafCount(ch) / total);
+        fan(ch, a, a + w, depth + 1, cx, cy, rx, ry, step, placed);
+        a += w;
+      }
+    };
+
+    const subtreeDepth = (name, seen = new Set()) => {
+      if (seen.has(name)) return 0;
+      seen.add(name);
+      const c = kids.get(name) || [];
+      return c.length ? 1 + Math.max(...c.map((ch) => subtreeDepth(ch, seen))) : 0;
+    };
+
+    const primary = roots[0];
+    const secondary = roots.slice(1);
+    const placed = new Set();
+
+    // Primary tree → centred, fills the canvas. Reserve a top seam for parked roots.
+    const md = Math.max(1, subtreeDepth(primary));
+    const seam = secondary.length ? 0.18 : 0.04;     // fraction of the circle kept clear at top
+    const start = -Math.PI / 2 + (seam / 2) * TAU;    // begin just past 12 o'clock, sweep clockwise
+    fan(primary, start, start + (1 - seam) * TAU, 0, 0.5, 0.54, 0.38, 0.34, 1 / md, placed);
+
+    // Disconnected roots (and any small trees under them) park in a top row, each
+    // fanning its own children downward so nothing collides with the central hub.
+    secondary.forEach((nm, i) => {
+      const f = secondary.length === 1 ? 0.5 : i / (secondary.length - 1);
+      const cx = 0.22 + f * 0.56;
+      pos.set(nm, { nx: cx, ny: 0.08 });
+      const kc = kids.get(nm) || [];
+      if (kc.length) {
+        const dmd = Math.max(1, subtreeDepth(nm));
+        fan(nm, Math.PI * 0.18, Math.PI * 0.82, 0, cx, 0.08, 0.13, 0.16, 1 / dmd, placed);
+      }
     });
   }
   // Leaders / executives first, then by heat-ish role, then name.
