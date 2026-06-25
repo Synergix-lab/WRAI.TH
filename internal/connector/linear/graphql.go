@@ -231,6 +231,79 @@ func (c *graphqlClient) openTeamIssues(ctx context.Context, teamKey string) ([]g
 	return issues, nil
 }
 
+// --- team meta (id + projects) for backfill routing ---
+
+const teamMetaQuery = `query TeamMeta($key: String!) {
+  teams(filter: { key: { eq: $key } }) {
+    nodes { id projects(first: 100) { nodes { id name } } }
+  }
+}`
+
+// teamMeta returns the team's id and a name→id map of its projects.
+func (c *graphqlClient) teamMeta(ctx context.Context, teamKey string) (teamID string, projects map[string]string, err error) {
+	var out struct {
+		Teams struct {
+			Nodes []struct {
+				ID       string `json:"id"`
+				Projects struct {
+					Nodes []struct {
+						ID   string `json:"id"`
+						Name string `json:"name"`
+					} `json:"nodes"`
+				} `json:"projects"`
+			} `json:"nodes"`
+		} `json:"teams"`
+	}
+	if err = c.do(ctx, teamMetaQuery, map[string]any{"key": teamKey}, &out); err != nil {
+		return "", nil, err
+	}
+	if len(out.Teams.Nodes) == 0 {
+		return "", nil, fmt.Errorf("team %q not found", teamKey)
+	}
+	projects = map[string]string{}
+	for _, p := range out.Teams.Nodes[0].Projects.Nodes {
+		projects[strings.ToLower(strings.TrimSpace(p.Name))] = p.ID
+	}
+	return out.Teams.Nodes[0].ID, projects, nil
+}
+
+// --- issue create (relay→Linear backfill) ---
+
+const issueCreateMutation = `mutation IssueCreate($input: IssueCreateInput!) {
+  issueCreate(input: $input) { success issue { id identifier } }
+}`
+
+// createIssue creates a Linear issue and returns its id + identifier. teamID is
+// required; projectID/stateID/description are optional (empty omitted).
+func (c *graphqlClient) createIssue(ctx context.Context, teamID, title, description, projectID, stateID string) (id, identifier string, err error) {
+	input := map[string]any{"teamId": teamID, "title": title}
+	if description != "" {
+		input["description"] = description
+	}
+	if projectID != "" {
+		input["projectId"] = projectID
+	}
+	if stateID != "" {
+		input["stateId"] = stateID
+	}
+	var out struct {
+		IssueCreate struct {
+			Success bool `json:"success"`
+			Issue   struct {
+				ID         string `json:"id"`
+				Identifier string `json:"identifier"`
+			} `json:"issue"`
+		} `json:"issueCreate"`
+	}
+	if err = c.do(ctx, issueCreateMutation, map[string]any{"input": input}, &out); err != nil {
+		return "", "", err
+	}
+	if !out.IssueCreate.Success || out.IssueCreate.Issue.ID == "" {
+		return "", "", fmt.Errorf("issueCreate returned success=false")
+	}
+	return out.IssueCreate.Issue.ID, out.IssueCreate.Issue.Identifier, nil
+}
+
 // --- write-back mutations ---
 
 const issueUpdateMutation = `mutation IssueUpdate($id: String!, $stateId: String!) {

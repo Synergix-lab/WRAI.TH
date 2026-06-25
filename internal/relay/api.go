@@ -180,6 +180,8 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 	case path == "/notification-events" && req.Method == http.MethodPost:
 		r.apiEmitNotificationEvent(w, req)
 	// Linear connector inbound webhook (404s unless the connector is active).
+	case path == "/connectors/linear/backfill" && req.Method == http.MethodPost:
+		r.apiLinearBackfill(w, req)
 	case path == "/connectors/linear/webhook" && req.Method == http.MethodPost:
 		r.apiLinearWebhook(w, req)
 	case path == "/linear/teams" && req.Method == http.MethodGet:

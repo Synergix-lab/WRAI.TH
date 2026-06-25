@@ -4,12 +4,32 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"agent-relay/internal/connector"
 	linearconn "agent-relay/internal/connector/linear"
 	"agent-relay/internal/models"
 )
+
+// apiLinearBackfill triggers the one-shot relay→Linear backfill (creates linked
+// issues for active relay-native tasks). Safe by default: DRY-RUN unless
+// ?dry_run=0 is passed. Loopback/admin only (behind the auth chain).
+func (r *Relay) apiLinearBackfill(w http.ResponseWriter, req *http.Request) {
+	conn := r.LinearConnector()
+	if conn == nil {
+		apiError(w, http.StatusBadRequest, "linear connector not active", nil)
+		return
+	}
+	dryRun := req.URL.Query().Get("dry_run") != "0" // default true
+	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+	res, err := conn.Backfill(req.Context(), dryRun, limit)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "backfill failed", err)
+		return
+	}
+	writeJSON(w, res)
+}
 
 // apiLinearWebhook handles POST /api/connectors/linear/webhook.
 //
