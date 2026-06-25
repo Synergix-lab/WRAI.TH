@@ -125,6 +125,48 @@ func (d *DB) UpsertLinearMirror(s LinearMirrorSeed) (taskID string, created bool
 	return id, true, nil
 }
 
+// ListBackfillTasks returns native relay tasks eligible for relay→Linear
+// backfill: active (not done/cancelled), not archived, not already a Linear
+// mirror, and not yet linked to a Linear issue.
+func (d *DB) ListBackfillTasks(project string) ([]models.Task, error) {
+	rows, err := d.ro().Query(
+		"SELECT "+taskColumns+" FROM tasks WHERE project = ? AND archived_at IS NULL "+
+			"AND status NOT IN ('done','cancelled') AND COALESCE(source,'native') != 'linear' "+
+			"AND (linear_issue_id IS NULL OR linear_issue_id = '') ORDER BY dispatched_at ASC",
+		project,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list backfill tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var tasks []models.Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan backfill task: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// LinkTaskLinear links an existing native task to a Linear issue (sets the
+// mirror key) without otherwise touching it — the next reconcile upsert then
+// reconciles content. linear_key is only overwritten when non-empty.
+func (d *DB) LinkTaskLinear(taskID, linearIssueID, linearKey string) error {
+	if taskID == "" || linearIssueID == "" {
+		return fmt.Errorf("link task linear: empty id")
+	}
+	_, err := d.conn.Exec(
+		"UPDATE tasks SET linear_issue_id = ?, linear_key = COALESCE(NULLIF(?, ''), linear_key) WHERE id = ?",
+		linearIssueID, linearKey, taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("link task linear: %w", err)
+	}
+	return nil
+}
+
 // MarkLinearDone stamps the overlay's done_at / completed_at when a Done webhook
 // echoes back (the one inbound exception that touches the overlay — Linear owns
 // Done via the GitHub PR-merge auto-close). Idempotent: only stamps if unset.
