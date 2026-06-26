@@ -216,6 +216,34 @@ Open `localhost:8090/v2/`. Every project, agent, and task live on one dashboard 
 </tr>
 </table>
 
+```mermaid
+flowchart TB
+  subgraph Clients["MCP clients -- Claude Code, Cursor, …"]
+    A1[agent: cto]
+    A2[agent: lead]
+  end
+  REST["dokan monitors<br/>POST /api/messages · /api/notification-events"]
+  GH["GitHub webhooks (HMAC)"]
+
+  Clients -->|MCP /mcp + 58 tools| Relay
+  REST -->|plain REST| Relay
+  GH --> EVT
+
+  subgraph Relay["agent-relay -- one Go binary"]
+    direction TB
+    MSG["Messaging<br/>delivery tracking"]
+    TASK["Tasks<br/>state machine"]
+    MEM["Memory + Decisions<br/>SQLite + FTS5"]
+    NOTIF["Notifications<br/>ECA rules"]
+    EVT[("events outbox<br/>+ sweeper")]
+    TOK["Token usage → $ cost"]
+  end
+
+  Relay <-->|bidirectional mirror| LIN[("Linear -- SSOT")]
+  Relay --> DB[("SQLite (WAL)")]
+  Relay --> UI["Dashboard<br/>localhost:8090/v2"]
+```
+
 <br>
 
 ## &#x1F465; Agents & Hierarchy
@@ -537,6 +565,61 @@ The kanban view `[2]` renders boards as tabs filtered per project. Cards are Tre
 ### Subtask roll-up
 
 Completion rolls up through the subtask tree. When a child task is marked done, its parent's `done/total` count updates automatically -- a parent's progress is simply how many of its child tasks are complete. One look at the parent tells you where the whole branch stands.
+
+<br>
+
+## &#x1F517; Linear Mirror -- bidirectional
+
+When the Linear connector is configured, Linear is the source of truth for work and the relay is a live two-way mirror -- so a lead never touches Linear directly, they just drive their task on the relay.
+
+- **Linear → relay (dispatch).** The connector polls open team issues (~1 min); moving an issue into a *started* state dispatches it to the routed agent as a relay task. Routing is a `linear_routing` map (`{linearProjectId: agent}`), so each Linear project lands in the right lane.
+- **relay → Linear (write-back).** Every task transition an agent makes (`claim → start → review → done`, plus comments) writes back -- `issueUpdate` to the workflow state matching the relay status (resolved by state *type*, never a hard-coded name) and `commentCreate` for the note. Bounded retries; outcomes are logged and the failure count is on `/api/health`.
+- **Split ownership.** The relay owns the pre-PR states (in-progress / in-review); Linear's native GitHub integration owns merge → Done (name the branch/PR with the issue id and the link + close are automatic). The two never double-write -- the relay only echoes Done locally, it doesn't push it back.
+
+<br>
+
+## &#x1F514; Notifications & the Event Bus
+
+State changes don't just sit on the board -- they fan out through a durable event bus that turns "something happened" into "the right agent was pinged."
+
+- **Events outbox + replay.** Every semantic event (a task transition, a monitor signal, a GitHub webhook) is persisted to an `events` table keyed by a `delivery_id` (UNIQUE -- an at-least-once source like a retried webhook dedupes via `INSERT OR IGNORE`). The table doubles as a replay log.
+- **Sweeper.** A goroutine drains undelivered events (`delivered_at IS NULL`) every ~1.5s, matches them against rules, fires the action, and marks them delivered. A failed delivery is retried and dead-lettered past a cap, so a relay restart or a transient failure can't silently drop a notification.
+- **ECA rules (WHEN / IF / THEN → target).** A rule fires on an event (`task.blocked`, `event:task-stale`, …) when its match predicate holds, then runs an action (`message` / `webhook` / `slack`) to a target (`assignee`, `dispatcher`, a role, a literal agent, or `user`). Matches support set membership -- `{"status":["in-progress","accepted"]}` scopes a rule to, say, only actively-worked tasks.
+- **GitHub webhooks.** `POST /api/webhooks/github` verifies the `X-Hub-Signature-256` HMAC *before* parsing, then drops the event into the outbox -- a CI failure or PR event pings the author through the same rule path.
+- **Plain-REST send.** Containerized monitors that don't speak MCP hit `POST /api/messages` and `/api/notification-events` directly -- same delivery semantics as the `send_message` tool, no JSON-RPC.
+
+```mermaid
+sequenceDiagram
+  participant Src as Source (transition / monitor / GitHub)
+  participant OB as events outbox
+  participant SW as sweeper (~1.5s)
+  participant Rules as ECA rules
+  participant Inbox as agent inbox
+  Src->>OB: persist (delivery_id UNIQUE → dedupe)
+  SW->>OB: poll delivered_at IS NULL
+  SW->>Rules: match (WHEN event / IF predicate)
+  Rules-->>Inbox: THEN action → target
+  SW->>OB: mark delivered (DLQ after N fails)
+```
+
+<br>
+
+## &#x1F9ED; Decision Log
+
+A team of agents re-litigates settled calls unless someone writes the call down. The `remember` tool freezes an ADR-style decision; `recall_decisions` reads the live set.
+
+- A decision is a project memory (`layer: "decision"`) with a stable id `DEC-<area>-NNN`, the one-line rule, a rationale, and a status.
+- **Dedup-or-supersede.** A near-identical decision in the same area is rejected unless it explicitly `supersedes` an existing one -- superseding archives the prior, so only the live set stays *accepted*.
+- **Read before you work.** The accepted set is injected into every agent's session-start context as a dedicated `decisions` block (bounded, never crowded out by the memory budget), so a freshly booted agent reads the settled calls without asking.
+
+<br>
+
+## &#x1F4CA; Observability & Cost
+
+The relay records real per-turn token usage (input / output / cache-read / cache-creation) per agent and rolls it into dollars.
+
+- `GET /api/cost` returns `$`/agent over a window, priced per model tier (Opus, Sonnet, Haiku). Cache-reads bill at 0.1× input and cache-writes at 1.25×, so a long-running cached agent isn't over-counted. Rows that predate real per-turn counts fall back to a `bytes/4` estimate -- an honest floor until the transcript hook feeds exact counts.
+- Per-agent quotas (`max_tokens` / messages / tasks / spawns over 24h) gate runaway work before it runs, not after.
 
 <br>
 
