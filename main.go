@@ -97,6 +97,17 @@ func startServer() {
 	cfg := config.Load()
 	cfg.Version = Version
 
+	// Single-writer guard: refuse to start if another relay already serves this
+	// DB. Two relays on one SQLite file corrupt it (this is what wiped agents +
+	// teams when a stray launchd relay came up on the same database).
+	if dbPath, perr := db.DBPath(); perr == nil {
+		if release, lerr := acquireServeLock(dbPath + ".lock"); lerr != nil {
+			log.Fatalf("another agent-relay is already serving %s — refusing to start a second writer (it corrupts the DB). Stop the other instance first.", dbPath)
+		} else {
+			defer release()
+		}
+	}
+
 	database, err := db.New()
 	if err != nil {
 		log.Fatalf("failed to init database: %v", err)
