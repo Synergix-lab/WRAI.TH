@@ -611,6 +611,7 @@ func buildOnboardingPrompt(name, description, cwd string, interactive bool) stri
 	b.WriteString("  name: \"cto\",\n  project: \"" + name + "\",\n")
 	b.WriteString("  role: \"Technical leader and architect. Owns the backlog, coordinates teams.\",\n")
 	b.WriteString("  is_executive: true,\n  profile_slug: \"cto\",\n")
+	b.WriteString("  cwd: \"<this repo's absolute path, $PWD>\",  // REQUIRED for token tracking: binds your session so the Stop hook's real-token usage attributes to you\n")
 	b.WriteString("  session_id: \"<session_id from whoami>\"\n})\n```\n\n")
 
 	b.WriteString("### 5d. Team memberships\n\n")
@@ -643,7 +644,7 @@ func buildOnboardingPrompt(name, description, cwd string, interactive bool) stri
 	b.WriteString("Use this exact template for each worker (replace `<SLUG>`, `<ROLE>`, `<NAME>`):\n\n")
 	b.WriteString("```bash\nclaude -w --dangerously-skip-permissions \\\n")
 	b.WriteString("  \"You are the <ROLE> of " + name + ". Boot sequence:\n")
-	b.WriteString("  1. register_agent({ name: '<SLUG>', project: '" + name + "', profile_slug: '<SLUG>', reports_to: 'cto' })\n")
+	b.WriteString("  1. register_agent({ name: '<SLUG>', project: '" + name + "', profile_slug: '<SLUG>', reports_to: 'cto', cwd: '$PWD' })  // cwd REQUIRED — binds your session so real per-turn tokens attribute to you\n")
 	b.WriteString("  2. get_session_context() — read everything: profile, vault docs, memories, tasks\n")
 	b.WriteString("  3. Research the technologies and patterns mentioned in your context using web search. Get up to speed.\n")
 	b.WriteString("  4. set_memory() to persist your research findings in the relay (scope: 'agent', key: 'onboarding-research')\n")

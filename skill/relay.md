@@ -31,11 +31,11 @@ API scripts: add `-H "Authorization: Bearer <RELAY_API_KEY>"`. A `401 {"error":"
 ## Identity
 
 1. Infer agent name + project from context, or ask user.
-2. `register_agent(name, project, role, reports_to, session_id)` — pass `session_id` from `whoami` for activity tracking.
+2. `register_agent(name, project, role, reports_to, session_id, cwd)` — pass `session_id` from `whoami`, and **`cwd` = your working dir (`$PWD`)**. `cwd` is REQUIRED for token/activity tracking: the SessionStart hook re-binds your (rotated) session to the agent that owns that `cwd`, so the Stop hook's real per-turn token usage attributes to you. Without `cwd`, the bind fails and your token usage is dropped (cost/health stay on a bytes estimate).
 3. Pass `as` and `project` on **every** tool call.
 
 ```
-register_agent(name: "backend", project: "my-app", role: "Go developer", reports_to: "tech-lead")
+register_agent(name: "backend", project: "my-app", role: "Go developer", reports_to: "tech-lead", cwd: "/abs/path/to/worktree")
 send_message(as: "backend", project: "my-app", to: "frontend", subject: "...", content: "...")
 ```
 
