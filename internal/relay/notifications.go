@@ -119,6 +119,9 @@ func (n *Notifier) handleEvent(evt MCPEvent) {
 //   - assignee_is_agent: bool — payload.assignee_is_agent must equal it
 //   - agent: string         — payload.agent must equal it
 //   - any arbitrary key      — exact equality against the payload value
+//   - any key with an ARRAY value — set membership: matches if the payload value
+//     equals ANY element (OR), e.g. {"status":["in-progress","accepted"]} so a
+//     stale-rule fires only on active tasks, not parked Todo/backlog.
 func matchRule(rule models.NotificationRule, payload map[string]any) bool {
 	if strings.TrimSpace(rule.Match) == "" || rule.Match == "{}" {
 		return true
@@ -132,11 +135,25 @@ func matchRule(rule models.NotificationRule, payload map[string]any) bool {
 		if !ok {
 			return false
 		}
-		if !valuesEqual(want, got) {
+		if !matchValue(want, got) {
 			return false
 		}
 	}
 	return true
+}
+
+// matchValue supports set membership: a JSON array matches if the payload value
+// equals ANY element (OR semantics); otherwise it's exact equality.
+func matchValue(want, got any) bool {
+	if arr, ok := want.([]any); ok {
+		for _, w := range arr {
+			if valuesEqual(w, got) {
+				return true
+			}
+		}
+		return false
+	}
+	return valuesEqual(want, got)
 }
 
 func valuesEqual(want, got any) bool {
