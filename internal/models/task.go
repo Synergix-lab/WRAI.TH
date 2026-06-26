@@ -35,6 +35,9 @@ type Task struct {
 	CycleName     *string `json:"cycle_name,omitempty"`
 	CycleStart    *string `json:"cycle_start,omitempty"`
 	CycleEnd      *string `json:"cycle_end,omitempty"`
+	// LinearProjectID drives project→agent routing for Linear-sourced tasks
+	// (e.g. resolving a stale task's assignee from the linear_routing map).
+	LinearProjectID *string `json:"linear_project_id,omitempty"`
 
 	// --- Execution overlay (relay-owned, auto-stamped temporal trail) ---
 	ClaimedBy      *string `json:"claimed_by,omitempty"`

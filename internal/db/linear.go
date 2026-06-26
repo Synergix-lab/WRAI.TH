@@ -29,7 +29,7 @@ type LinearMirrorSeed struct {
 	Labels          string // json array; defaults to "[]"
 	LinearState     *string
 	Assignee        *string
-	LinearProjectID *string // Linear project UUID — drives project→agent routing (in-memory; not persisted)
+	LinearProjectID *string // Linear project UUID — persisted; drives project→agent routing
 	CycleID         *string
 	CycleName       *string
 	CycleStart      *string
@@ -95,11 +95,13 @@ func (d *DB) UpsertLinearMirror(s LinearMirrorSeed) (taskID string, created bool
 			   title=?, description=?, priority=?, status=?, source='linear',
 			   linear_key=?, external_url=?, points=?, labels=?, linear_state=?,
 			   assignee=?, cycle_id=?, cycle_name=?, cycle_start=?, cycle_end=?,
+			   linear_project_id=COALESCE(?, linear_project_id),
 			   parent_task_id=COALESCE(?, parent_task_id)
 			 WHERE id=? AND project=?`,
 			s.Title, s.Description, s.Priority, s.Status,
 			s.LinearKey, s.ExternalURL, s.Points, s.Labels, s.LinearState,
 			s.Assignee, s.CycleID, s.CycleName, s.CycleStart, s.CycleEnd,
+			s.LinearProjectID,
 			s.ParentTaskID, existing.ID, s.Project,
 		)
 		if err != nil {
@@ -113,11 +115,11 @@ func (d *DB) UpsertLinearMirror(s LinearMirrorSeed) (taskID string, created bool
 		`INSERT INTO tasks
 		   (id, profile_slug, dispatched_by, title, description, priority, status, project, dispatched_at,
 		    source, linear_issue_id, linear_key, external_url, points, labels, linear_state, assignee,
-		    cycle_id, cycle_name, cycle_start, cycle_end, parent_task_id, blocked_periods)
-		 VALUES (?, '', 'linear', ?, ?, ?, ?, ?, ?, 'linear', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')`,
+		    cycle_id, cycle_name, cycle_start, cycle_end, parent_task_id, linear_project_id, blocked_periods)
+		 VALUES (?, '', 'linear', ?, ?, ?, ?, ?, ?, 'linear', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')`,
 		id, s.Title, s.Description, s.Priority, s.Status, s.Project, now,
 		s.LinearIssueID, s.LinearKey, s.ExternalURL, s.Points, s.Labels, s.LinearState, s.Assignee,
-		s.CycleID, s.CycleName, s.CycleStart, s.CycleEnd, s.ParentTaskID,
+		s.CycleID, s.CycleName, s.CycleStart, s.CycleEnd, s.ParentTaskID, s.LinearProjectID,
 	)
 	if err != nil {
 		return "", false, fmt.Errorf("insert linear mirror: %w", err)

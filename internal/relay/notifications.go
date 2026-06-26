@@ -387,8 +387,15 @@ func (n *Notifier) resolveTargets(project, target string, payload map[string]any
 		}
 		return []string{*a.ReportsTo}
 	case "assignee":
-		// the task's own assignee, from the semantic payload
+		// the task's own assignee. Prefer the explicit payload agent; otherwise
+		// resolve from the task itself — its claimer, or (for Linear-sourced tasks
+		// with an empty profile_slug) the agent routed to its Linear project. This
+		// lets a stale-scanner emit task-stale with just a task_id and still target
+		// the right lead.
 		if a := strVal(payload["agent"]); a != "" {
+			return []string{a}
+		}
+		if a := n.resolveTaskAssignee(project, strVal(payload["task_id"])); a != "" {
 			return []string{a}
 		}
 		return nil
@@ -405,6 +412,35 @@ func (n *Notifier) resolveTargets(project, target string, payload map[string]any
 	}
 	// Fall back to a literal agent name.
 	return []string{target}
+}
+
+// resolveTaskAssignee resolves the agent responsible for a task when the event
+// payload didn't carry one. Order: the task's claimer (assigned_to), then the
+// agent routed to the task's Linear project (linear_routing map) — the path for
+// Linear-sourced tasks whose profile_slug is empty. Returns "" when unresolvable.
+func (n *Notifier) resolveTaskAssignee(project, taskID string) string {
+	if taskID == "" {
+		return ""
+	}
+	task, err := n.db.GetTask(taskID, project)
+	if err != nil || task == nil {
+		return ""
+	}
+	if task.AssignedTo != nil && *task.AssignedTo != "" {
+		return *task.AssignedTo
+	}
+	if task.LinearProjectID == nil || *task.LinearProjectID == "" {
+		return ""
+	}
+	raw := strings.TrimSpace(n.db.GetSetting("linear_routing"))
+	if raw == "" {
+		return ""
+	}
+	var routing map[string]string
+	if err := json.Unmarshal([]byte(raw), &routing); err != nil {
+		return ""
+	}
+	return routing[*task.LinearProjectID]
 }
 
 func matchByRole(database *db.DB, project, role string) []string {
