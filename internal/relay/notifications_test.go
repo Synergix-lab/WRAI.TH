@@ -30,6 +30,17 @@ func TestMatchRule(t *testing.T) {
 			map[string]any{"agent": "alice", "assignee_is_agent": true}, true},
 		{"multi-condition one fails", `{"agent":"alice","assignee_is_agent":true}`,
 			map[string]any{"agent": "alice", "assignee_is_agent": false}, false},
+		// set membership (array value = OR) — scopes the stale-rule to active tasks
+		{"array matches member", `{"status":["in-progress","accepted"]}`,
+			map[string]any{"status": "in-progress"}, true},
+		{"array matches other member", `{"status":["in-progress","accepted"]}`,
+			map[string]any{"status": "accepted"}, true},
+		{"array rejects non-member (parked Todo)", `{"status":["in-progress","accepted"]}`,
+			map[string]any{"status": "pending"}, false},
+		{"array + other condition both pass", `{"status":["in-progress","accepted"],"escalate":true}`,
+			map[string]any{"status": "in-progress", "escalate": true}, true},
+		{"array passes but sibling fails", `{"status":["in-progress","accepted"],"escalate":true}`,
+			map[string]any{"status": "in-progress", "escalate": false}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
