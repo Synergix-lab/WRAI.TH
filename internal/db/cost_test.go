@@ -60,3 +60,29 @@ func TestGetCostByAgent(t *testing.T) {
 		t.Fatalf("carol (model-less, default=haiku) cost = %.4f, want 1.00", carol)
 	}
 }
+
+// TestGetCostByAgent_BytesFallback covers the legacy path: a bytes-only row (no
+// real token counts) is estimated at bytes/4 tokens priced at the input rate.
+func TestGetCostByAgent_BytesFallback(t *testing.T) {
+	d := testDB(t)
+	const project = "p2"
+	const since = "2020-01-01T00:00:00.000000Z"
+	d.SetSetting("cost_default_model", "opus")
+
+	// 4M bytes → 1M estimated tokens at opus input ($5/MTok) = $5.00.
+	if err := d.InsertTokenUsageBatch([]TokenRecord{
+		{Project: project, Agent: "dave", Tool: "send_message", Bytes: 4_000_000, CreatedAt: "2026-06-26T00:00:00.000000Z"},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	costs, err := d.GetCostByAgent(project, since)
+	if err != nil || len(costs) != 1 {
+		t.Fatalf("cost: len=%d err=%v", len(costs), err)
+	}
+	if costs[0].Tokens != 1_000_000 {
+		t.Fatalf("est tokens = %d, want 1_000_000 (bytes/4)", costs[0].Tokens)
+	}
+	if math.Abs(costs[0].USD-5.0) > 1e-6 {
+		t.Fatalf("bytes-fallback cost = %.4f, want 5.00", costs[0].USD)
+	}
+}

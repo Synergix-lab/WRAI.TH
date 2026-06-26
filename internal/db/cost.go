@@ -63,7 +63,7 @@ func (d *DB) GetCostByAgent(project, since string) ([]AgentCost, error) {
 	}
 	rows, err := d.ro().Query(`
 		SELECT agent, COALESCE(model, ''),
-		       SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_creation_tokens)
+		       SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_creation_tokens), SUM(bytes)
 		FROM token_usage
 		WHERE project = ? AND created_at >= ?
 		GROUP BY agent, model`,
@@ -77,8 +77,8 @@ func (d *DB) GetCostByAgent(project, since string) ([]AgentCost, error) {
 	agg := map[string]*AgentCost{}
 	for rows.Next() {
 		var agent, model string
-		var in, out, cr, cc int64
-		if err := rows.Scan(&agent, &model, &in, &out, &cr, &cc); err != nil {
+		var in, out, cr, cc, bytes int64
+		if err := rows.Scan(&agent, &model, &in, &out, &cr, &cc, &bytes); err != nil {
 			return nil, fmt.Errorf("scan cost: %w", err)
 		}
 		a := agg[agent]
@@ -86,8 +86,18 @@ func (d *DB) GetCostByAgent(project, since string) ([]AgentCost, error) {
 			a = &AgentCost{Agent: agent}
 			agg[agent] = a
 		}
-		a.Tokens += in + out + cr + cc
-		a.USD += costUSD(rateForModel(model, fallback), in, out, cr, cc)
+		rate := rateForModel(model, fallback)
+		if in+out+cr+cc > 0 {
+			a.Tokens += in + out + cr + cc
+			a.USD += costUSD(rate, in, out, cr, cc)
+		} else if bytes > 0 {
+			// Legacy bytes-only row (no real per-turn counts yet): estimate
+			// tokens at bytes/4 and price at the input rate — a rough, honest
+			// floor until the Stop hook feeds real input/output counts.
+			est := bytes / 4
+			a.Tokens += est
+			a.USD += costUSD(rate, est, 0, 0, 0)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
