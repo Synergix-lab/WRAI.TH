@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // hookEvents maps a Claude Code hook event to the script that services it. This
@@ -52,6 +53,14 @@ func RunHooks(scripts embed.FS, args []string) {
 }
 
 func hooksInstall(scripts embed.FS, hooksDir, settingsPath string) {
+	// Windows: the embedded hooks are bash (.sh) + assume jq/curl — wiring them on
+	// Windows would install dead commands. PowerShell hooks that POST to the relay
+	// are a follow-up; until then refuse rather than make settings.json worse.
+	if runtime.GOOS == "windows" {
+		fmt.Println("✗ `hooks install` does not yet support Windows (the hooks are bash).")
+		fmt.Println("  Use install.ps1 for now; native PowerShell hooks are a follow-up.")
+		return
+	}
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "mkdir %s: %v\n", hooksDir, err)
 		os.Exit(1)
