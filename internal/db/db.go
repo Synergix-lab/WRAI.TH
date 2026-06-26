@@ -426,18 +426,19 @@ func migrate(conn *sql.DB) error {
 		"archived_at":      "TEXT",
 
 		// --- Linear zone (read-only, replicated from Linear SSOT) ---
-		"source":          "TEXT NOT NULL DEFAULT 'native'", // 'native' | 'linear'
-		"linear_issue_id": "TEXT",
-		"linear_key":      "TEXT", // e.g. SYN-123
-		"external_url":    "TEXT",
-		"points":          "INTEGER",
-		"labels":          "TEXT NOT NULL DEFAULT '[]'", // json array
-		"linear_state":    "TEXT",
-		"assignee":        "TEXT",
-		"cycle_id":        "TEXT",
-		"cycle_name":      "TEXT",
-		"cycle_start":     "TEXT",
-		"cycle_end":       "TEXT",
+		"source":            "TEXT NOT NULL DEFAULT 'native'", // 'native' | 'linear'
+		"linear_issue_id":   "TEXT",
+		"linear_key":        "TEXT", // e.g. SYN-123
+		"external_url":      "TEXT",
+		"points":            "INTEGER",
+		"labels":            "TEXT NOT NULL DEFAULT '[]'", // json array
+		"linear_state":      "TEXT",
+		"assignee":          "TEXT",
+		"cycle_id":          "TEXT",
+		"cycle_name":        "TEXT",
+		"cycle_start":       "TEXT",
+		"cycle_end":         "TEXT",
+		"linear_project_id": "TEXT", // Linear project UUID — drives project→agent routing
 		// priority already exists on the base table.
 
 		// --- Execution overlay (relay-owned, auto-stamped temporal trail) ---
