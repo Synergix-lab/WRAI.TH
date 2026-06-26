@@ -860,6 +860,26 @@ func migrate(conn *sql.DB) error {
 	)`)
 	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_notification_deliveries_created ON notification_deliveries(created_at)`)
 
+	// events — the durable outbox + replay log for the event bus (TSU-52). Every
+	// semantic event is persisted here; delivery_id is the idempotency key
+	// (UNIQUE) so an at-least-once source — e.g. a retried GitHub webhook — is
+	// deduped via INSERT OR IGNORE. delivered_at/attempts/last_error are owned by
+	// the sweeper (slice-B): NULL delivered_at = not yet processed.
+	_, _ = conn.Exec(`CREATE TABLE IF NOT EXISTS events (
+		id           TEXT PRIMARY KEY,
+		delivery_id  TEXT NOT NULL UNIQUE,
+		project      TEXT NOT NULL DEFAULT 'default',
+		event_type   TEXT NOT NULL,
+		agent        TEXT NOT NULL DEFAULT '',
+		payload      TEXT NOT NULL DEFAULT '{}',
+		created_at   TEXT NOT NULL,
+		delivered_at TEXT,
+		attempts     INTEGER NOT NULL DEFAULT 0,
+		last_error   TEXT NOT NULL DEFAULT ''
+	)`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_events_undelivered ON events(delivered_at) WHERE delivered_at IS NULL`)
+	_, _ = conn.Exec(`CREATE INDEX IF NOT EXISTS idx_events_created ON events(id DESC)`)
+
 	// Lowercase all agent names for case-insensitive matching
 	migrateLowercaseAgentNames(conn)
 

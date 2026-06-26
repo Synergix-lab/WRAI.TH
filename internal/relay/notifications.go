@@ -94,6 +94,16 @@ func (n *Notifier) handleEvent(evt MCPEvent) {
 	if evt.Semantic == nil {
 		return
 	}
+	// Persist to the durable outbox / replay log (TSU-52 slice-A). Best-effort:
+	// a logging failure never blocks rule firing. delivery_id is left empty here
+	// (internal event → fresh UUID); external sources pass a stable key for
+	// dedup. The synchronous firing below is unchanged; the sweeper (slice-B)
+	// will later drive delivery from this table.
+	if payload, err := json.Marshal(evt.Semantic); err == nil {
+		if _, _, err := n.db.InsertEvent("", evt.Project, evt.Type, strVal(evt.Semantic["agent"]), string(payload)); err != nil {
+			log.Printf("notifier: persist event %s: %v", evt.Type, err)
+		}
+	}
 	rules, err := n.db.ListEnabledNotificationRulesForEvent(evt.Type)
 	if err != nil {
 		log.Printf("notifier: list rules for %s: %v", evt.Type, err)
