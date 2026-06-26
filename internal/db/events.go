@@ -104,6 +104,36 @@ func (d *DB) MarkEventDelivered(id string) error {
 	return err
 }
 
+// IncrementEventAttempt bumps the retry counter and records the last error,
+// leaving delivered_at NULL so the sweeper retries the row next tick.
+func (d *DB) IncrementEventAttempt(id, lastErr string) error {
+	_, err := d.conn.Exec(`UPDATE events SET attempts = attempts + 1, last_error = ? WHERE id = ?`, lastErr, id)
+	return err
+}
+
+// MarkEventDead dead-letters an event: stamps delivered_at (so it leaves the
+// sweeper queue) and records why. attempts is bumped for the audit trail.
+func (d *DB) MarkEventDead(id, lastErr string) error {
+	now := time.Now().UTC().Format(memoryTimeFmt)
+	_, err := d.conn.Exec(`UPDATE events SET delivered_at = ?, attempts = attempts + 1, last_error = ? WHERE id = ?`, now, lastErr, id)
+	return err
+}
+
+// PruneDeliveredEvents caps the replay log: keeps the newest `keep` delivered
+// rows, deletes older delivered ones. Undelivered (queued) rows are never
+// pruned. Best-effort maintenance against unbounded growth.
+func (d *DB) PruneDeliveredEvents(keep int) {
+	if keep < 1 {
+		keep = 1000
+	}
+	_, _ = d.conn.Exec(
+		`DELETE FROM events WHERE delivered_at IS NOT NULL AND id NOT IN (
+		   SELECT id FROM events WHERE delivered_at IS NOT NULL ORDER BY id DESC LIMIT ?
+		 )`,
+		keep,
+	)
+}
+
 func scanEvents(rows interface {
 	Next() bool
 	Scan(...any) error

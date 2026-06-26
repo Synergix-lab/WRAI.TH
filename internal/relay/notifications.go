@@ -64,8 +64,18 @@ func NewNotifier(database *db.DB, registry *SessionRegistry, events *EventBus) *
 func (n *Notifier) Start(done <-chan struct{}) {
 	n.done = done
 	go n.runEvaluator(done)
+	go n.runSweeper(done)
 	go n.runDigestScheduler(done)
 }
+
+// Outbox sweeper tuning.
+const (
+	sweepInterval    = 1500 * time.Millisecond // delivery latency ceiling per tick
+	sweepBatch       = 100                     // undelivered events processed per tick
+	maxEventAttempts = 5                       // dead-letter past this many failed tries
+	sweepPruneEvery  = 40                      // prune the replay log every Nth tick (~1min)
+	eventLogKeep     = 5000                    // delivered rows retained for replay
+)
 
 // --- Evaluator ---
 
@@ -87,40 +97,100 @@ func (n *Notifier) runEvaluator(done <-chan struct{}) {
 	}
 }
 
-// handleEvent matches a single event against enabled rules. Only semantic
-// events (those carrying a Semantic payload) are considered; visual events are
-// ignored.
+// handleEvent persists a semantic event to the durable outbox (TSU-52). Delivery
+// is no longer synchronous here — the sweeper (runSweeper) drains the outbox and
+// fires rules, so a relay restart or a transient action failure can't silently
+// drop a notification. Only semantic events (those carrying a Semantic payload)
+// are persisted; visual events are ignored.
 func (n *Notifier) handleEvent(evt MCPEvent) {
 	if evt.Semantic == nil {
 		return
 	}
-	// Persist to the durable outbox / replay log (TSU-52 slice-A). Best-effort:
-	// a logging failure never blocks rule firing. delivery_id is left empty here
-	// (internal event → fresh UUID); external sources pass a stable key for
-	// dedup. The synchronous firing below is unchanged; the sweeper (slice-B)
-	// will later drive delivery from this table.
-	if payload, err := json.Marshal(evt.Semantic); err == nil {
-		if _, _, err := n.db.InsertEvent("", evt.Project, evt.Type, strVal(evt.Semantic["agent"]), string(payload)); err != nil {
-			log.Printf("notifier: persist event %s: %v", evt.Type, err)
-		}
-	}
-	rules, err := n.db.ListEnabledNotificationRulesForEvent(evt.Type)
+	// delivery_id is empty here (internal event → fresh UUID); external sources
+	// (a GitHub webhook) pass a stable key so a retry dedupes via INSERT OR IGNORE.
+	payload, err := json.Marshal(evt.Semantic)
 	if err != nil {
-		log.Printf("notifier: list rules for %s: %v", evt.Type, err)
+		log.Printf("notifier: marshal event %s: %v", evt.Type, err)
 		return
 	}
+	if _, _, err := n.db.InsertEvent("", evt.Project, evt.Type, strVal(evt.Semantic["agent"]), string(payload)); err != nil {
+		log.Printf("notifier: persist event %s: %v", evt.Type, err)
+	}
+}
+
+// deliverEvent fires the rules matching one outbox event, then marks it
+// delivered. It only retries (toward the DLQ) when EVERY matched rule failed —
+// that path has no successful side effect (e.g. an already-sent inbox message)
+// to duplicate on the next attempt, so retries stay safe.
+func (n *Notifier) deliverEvent(e db.Event) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(e.Payload), &payload); err != nil {
+		n.failEvent(e, "payload unmarshal: "+err.Error())
+		return
+	}
+	rules, err := n.db.ListEnabledNotificationRulesForEvent(e.EventType)
+	if err != nil {
+		n.failEvent(e, "list rules: "+err.Error())
+		return
+	}
+	fired, failures := 0, 0
 	for _, rule := range rules {
-		rule := rule
-		// Scope by project: a rule fires for its own project, or for any
-		// project if it has no specific project ("default" acts as global only
-		// when the event is also default).
-		if rule.Project != evt.Project && rule.Project != "default" {
+		// Scope by project: a rule fires for its own project, or "default" acts
+		// as a global fallback.
+		if rule.Project != e.Project && rule.Project != "default" {
 			continue
 		}
-		if !matchRule(rule, evt.Semantic) {
+		if !matchRule(rule, payload) {
 			continue
 		}
-		go n.fireRule(rule, evt.Type, evt.Project, evt.Semantic, false)
+		fired++
+		if _, rec := n.fireRule(rule, e.EventType, e.Project, payload, false); rec != nil && rec.Outcome != "ok" {
+			failures++
+		}
+	}
+	// Delivered when nothing matched, or at least one matched rule succeeded.
+	if fired == 0 || failures < fired {
+		_ = n.db.MarkEventDelivered(e.ID)
+		return
+	}
+	n.failEvent(e, "all matched rules failed")
+}
+
+// failEvent retries an event or dead-letters it past the attempt cap.
+func (n *Notifier) failEvent(e db.Event, reason string) {
+	if e.Attempts+1 >= maxEventAttempts {
+		log.Printf("notifier: event %s dead-lettered after %d attempts: %s", e.ID, e.Attempts+1, reason)
+		_ = n.db.MarkEventDead(e.ID, "DLQ: "+reason)
+		return
+	}
+	_ = n.db.IncrementEventAttempt(e.ID, reason)
+}
+
+// runSweeper drains the outbox: polls undelivered events, fires their rules, and
+// marks them delivered (or dead-letters after maxEventAttempts). Replaces the
+// old synchronous fire-and-forget so delivery is durable + replayable. Prunes
+// the replay log periodically to bound growth.
+func (n *Notifier) runSweeper(done <-chan struct{}) {
+	ticker := time.NewTicker(sweepInterval)
+	defer ticker.Stop()
+	ticks := 0
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			events, err := n.db.UndeliveredEvents(sweepBatch)
+			if err != nil {
+				log.Printf("notifier: sweep: %v", err)
+				continue
+			}
+			for _, e := range events {
+				n.deliverEvent(e)
+			}
+			if ticks++; ticks%sweepPruneEvery == 0 {
+				n.db.PruneDeliveredEvents(eventLogKeep)
+			}
+		}
 	}
 }
 
