@@ -12,6 +12,21 @@ type mcpConfig struct {
 	MCPServers map[string]mcpServerEntry `json:"mcpServers"`
 }
 
+// ensureToolsFull appends ?tools=full (or &tools=full) to a relay MCP URL that
+// has no tools= mode, so list-driven clients see every tool. An explicit
+// tools=discovery is respected (returns unchanged). Returns the URL + whether it
+// changed.
+func ensureToolsFull(rawURL string) (string, bool) {
+	if strings.Contains(rawURL, "tools=") {
+		return rawURL, false
+	}
+	sep := "?"
+	if strings.Contains(rawURL, "?") {
+		sep = "&"
+	}
+	return rawURL + sep + "tools=full", true
+}
+
 type mcpServerEntry struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
@@ -85,9 +100,22 @@ func runInit(args []string) {
 		if err == nil {
 			var cfg mcpConfig
 			if json.Unmarshal(existing, &cfg) == nil {
-				if _, exists := cfg.MCPServers["agent-relay"]; exists {
+				if entry, exists := cfg.MCPServers["agent-relay"]; exists {
+					// Already configured — upgrade the URL to ?tools=full if it's
+					// missing, so an existing project gets the fix (list-driven
+					// clients couldn't see create_project under the discovery
+					// default) without a manual edit. Idempotent otherwise.
+					if upgraded, changed := ensureToolsFull(entry.URL); changed {
+						entry.URL = upgraded
+						cfg.MCPServers["agent-relay"] = entry
+						writeConfig(mcpPath, cfg)
+						fmt.Printf("upgraded agent-relay URL in %s (added tools=full)\n", mcpPath)
+						fmt.Printf("  url: %s\n", upgraded)
+						fmt.Println("  → run /mcp in Claude Code to reload")
+						return
+					}
 					fmt.Printf("agent-relay already configured in %s\n", mcpPath)
-					fmt.Printf("  url: %s\n", cfg.MCPServers["agent-relay"].URL)
+					fmt.Printf("  url: %s\n", entry.URL)
 					return
 				}
 				// Add agent-relay to existing config
