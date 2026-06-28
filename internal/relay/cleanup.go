@@ -107,7 +107,15 @@ func StartCleanup(database *db.DB, done <-chan struct{}) {
 						log.Printf("db backup error: %v", err)
 					} else {
 						lastBackup = time.Now()
-						log.Printf("db snapshot written: %s", path)
+						// Verified-restore drill: confirm the snapshot is sound +
+						// non-empty before we rely on it (runs on the snapshot file,
+						// not the live DB, so it never locks the writer) — TSU-137.
+						if counts, verr := db.VerifyDBFile(path); verr != nil {
+							log.Printf("db snapshot VERIFY FAILED %s: %v", path, verr)
+						} else {
+							log.Printf("db snapshot written + verified: %s (agents=%d messages=%d tasks=%d)",
+								path, counts["agents"], counts["messages"], counts["tasks"])
+						}
 					}
 				}
 			}
