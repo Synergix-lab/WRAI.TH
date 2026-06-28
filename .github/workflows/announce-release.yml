@@ -38,12 +38,21 @@ jobs:
             echo "No Discord webhooks configured — skipping." >&2; exit 0
           fi
 
-          # --- publish-gate: only a published, non-prerelease GitHub Release announces ---
-          rel=$(gh api "repos/${REPO}/releases/tags/${TAG}" 2>/dev/null || true)
-          if [ -z "$rel" ] \
-             || [ "$(printf '%s' "$rel" | jq -r '.draft')" != "false" ] \
-             || [ "$(printf '%s' "$rel" | jq -r '.prerelease')" = "true" ]; then
-            echo "No published release for ${TAG} (bare tag / draft / prerelease) — skipping." >&2; exit 0
+          # --- publish-gate: WAIT for a published, non-prerelease GitHub Release ---
+          # tag-push fires this workflow BEFORE the Release object exists (race) — poll for it.
+          rel=""
+          for i in $(seq 1 10); do
+            rel=$(gh api "repos/${REPO}/releases/tags/${TAG}" 2>/dev/null || true)
+            if [ -n "$rel" ] \
+               && [ "$(printf '%s' "$rel" | jq -r '.draft')" = "false" ] \
+               && [ "$(printf '%s' "$rel" | jq -r '.prerelease')" != "true" ]; then
+              break
+            fi
+            echo "Release for ${TAG} not published yet (attempt $i/10) — waiting 12s..." >&2
+            rel=""; sleep 12
+          done
+          if [ -z "$rel" ]; then
+            echo "No published release for ${TAG} after retries (bare tag / draft / prerelease) — skipping." >&2; exit 0
           fi
           body=$(printf '%s' "$rel" | jq -r '.body // ""')
           [ -z "$body" ] && body="New release: ${TAG}"
