@@ -1321,8 +1321,16 @@ func TestCreateProject(t *testing.T) {
 		t.Fatal("expected success")
 	}
 	text := res.Content[0].(mcp.TextContent).Text
-	if !strings.Contains(text, "Colony Setup") {
-		t.Error("expected onboarding prompt with 'Colony Setup'")
+	if !strings.Contains(text, "Project Setup") {
+		t.Error("expected onboarding prompt with 'Project Setup' header")
+	}
+	// Phase 1 must wire the hooks (the relay is blind without them) and must NOT
+	// reference the removed vault tools.
+	if !strings.Contains(text, "agent-relay hooks install") {
+		t.Error("expected onboarding to install the activity/identity hooks")
+	}
+	if strings.Contains(text, "search_vault") || strings.Contains(text, "register_vault") {
+		t.Error("onboarding must not reference the removed vault tools")
 	}
 	if !strings.Contains(text, "test-app") {
 		t.Error("expected project name in prompt")
