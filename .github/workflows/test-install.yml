@@ -124,3 +124,18 @@ jobs:
           sleep 2
           curl -sf http://localhost:8090/api/projects | grep -q '\[' && echo "FTS5 OK" || echo "FTS5 FAIL"
           kill %1 2>/dev/null || true
+
+  # TSU-224 suite install-smoke contract: a bare-image clean room that runs the
+  # documented install and asserts (via the shared install-smoke/assert.sh) that
+  # the binary, the public Claude Code skill, and the hooks actually landed, and
+  # that a re-run is idempotent. Gated to AFTER a Release (and manual dispatch):
+  # the installer downloads the shipped binary, so the skill subcommand must be
+  # in a published release for this to be green — a red build BLOCKS the release.
+  install-smoke:
+    name: Install smoke (clean room)
+    if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build clean-room install smoke
+        run: docker build -f install-smoke/wraith.Dockerfile -t wraith-install-smoke .
