@@ -29,6 +29,9 @@ type Relay struct {
 	Events    *EventBus
 	Handlers  *Handlers
 	Notifier  *Notifier
+	// Federation forwards direct messages between this relay and trusted peers.
+	// Shared with Handlers; disabled (no peers) unless RELAY_FEDERATION_PEERS set.
+	Federation *Federation
 	// Linear connector runtime — swapped at runtime by ReconfigureLinear()
 	// (settings-driven, no restart). Read through LinearConnector()/TaskConn().
 	linearMu   sync.RWMutex
@@ -68,6 +71,11 @@ func New(database *db.DB, ingester *ingest.Ingester, cfg config.Config) *Relay {
 	registry := NewSessionRegistry(mcpSrv)
 	handlers := NewHandlers(database, registry, ingester, events)
 	handlers.requireRegistered = cfg.RequireRegistered
+
+	// Federation registry — shared between the send path (Handlers) and the
+	// inbound REST route (Relay). Empty peer list => disabled, no behavior change.
+	federation := NewFederation(cfg.FederationPeers)
+	handlers.federation = federation
 
 	// Register every tool from the registry (single source of truth in
 	// toolset.go), plus the discovery pair used by ?tools=discovery
@@ -109,6 +117,7 @@ func New(database *db.DB, ingester *ingest.Ingester, cfg config.Config) *Relay {
 		Events:         events,
 		Handlers:       handlers,
 		Notifier:       notifier,
+		Federation:     federation,
 		taskConn:       connector.Noop{},
 		Config:         cfg,
 		StartedAt:      time.Now().UTC(),

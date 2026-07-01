@@ -33,6 +33,14 @@ func authMiddleware(apiKey string, next http.Handler) http.Handler {
 	trustLoopback := os.Getenv("RELAY_TRUST_LOOPBACK") != "0"
 	expected := []byte(apiKey)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Federation inbound is exempt from the global API key: it carries its own
+		// per-peer token (X-Relay-Federation-Token), verified constant-time in the
+		// handler. This keeps peer relays from ever needing the admin key, and the
+		// handler 404s when federation is disabled / 401s on a bad token.
+		if r.URL.Path == "/api/federation/inbound" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if trustLoopback && isLoopbackRemote(r.RemoteAddr) {
 			next.ServeHTTP(w, r)
 			return

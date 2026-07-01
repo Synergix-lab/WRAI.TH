@@ -67,6 +67,8 @@ func (r *Relay) ServeAPI(w http.ResponseWriter, req *http.Request) {
 		r.apiGetAllMessages(w, req)
 	case path == "/messages" && req.Method == http.MethodPost:
 		r.apiPostMessage(w, req)
+	case path == "/federation/inbound" && req.Method == http.MethodPost:
+		r.apiFederationInbound(w, req)
 	case path == "/messages/all-projects" && req.Method == http.MethodGet:
 		r.apiGetAllMessagesAllProjects(w)
 	case path == "/messages/latest-all" && req.Method == http.MethodGet:
