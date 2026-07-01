@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -44,9 +45,29 @@ type Config struct {
 	LinearTeamKey       string        // LINEAR_TEAM_KEY: team key (e.g. SYN); reconcile + state scope
 	LinearReconcileIval time.Duration // RELAY_LINEAR_RECONCILE_INTERVAL: active-cycle poll (default 5m)
 
+	// --- Federation (relay-to-relay message forwarding) ---
+	// FederationPeers lists trusted remote relays this instance can forward DMs
+	// to and accept DMs from. Loaded from RELAY_FEDERATION_PEERS as a JSON array;
+	// each peer carries a Label (local alias, used in `agent@label` addressing), a
+	// base URL, a shared Token (peer-specific credential, NOT the global API key),
+	// and the target Project on that peer. Empty = federation off (byte-identical
+	// to today). Each peer's Token authenticates its inbound POSTs to this relay's
+	// /api/federation/inbound route independently of RELAY_API_KEY.
+	FederationPeers []FederationPeer // RELAY_FEDERATION_PEERS (JSON array)
+
 	// Version is the build tag (from main.Version). Surfaced in /api/health
 	// and MCP server info. Set by the caller before relay.New.
 	Version string
+}
+
+// FederationPeer is one trusted remote relay. Label is a local alias (the "@peer"
+// in addressing); Token is a per-peer shared secret; Project is the namespace on
+// the peer that forwarded messages land in (default "default").
+type FederationPeer struct {
+	Label   string `json:"label"`
+	URL     string `json:"url"`
+	Token   string `json:"token"`
+	Project string `json:"project"`
 }
 
 // LinearActive reports whether the Linear connector should run: mirror mode on
@@ -91,6 +112,25 @@ func Load() Config {
 
 	if v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_REQUIRE_REGISTERED"))); v == "1" || v == "true" || v == "yes" {
 		cfg.RequireRegistered = true
+	}
+
+	// Federation peers: JSON array in RELAY_FEDERATION_PEERS. A malformed value or
+	// entries missing label/url/token are skipped (fail-open to "no such peer"),
+	// never fatal — a bad env var must not stop the relay from booting.
+	if v := strings.TrimSpace(os.Getenv("RELAY_FEDERATION_PEERS")); v != "" {
+		var peers []FederationPeer
+		if err := json.Unmarshal([]byte(v), &peers); err == nil {
+			for _, p := range peers {
+				p.Label = strings.ToLower(strings.TrimSpace(p.Label))
+				p.URL = strings.TrimSpace(p.URL)
+				p.Token = strings.TrimSpace(p.Token)
+				p.Project = strings.TrimSpace(p.Project)
+				if p.Label == "" || p.URL == "" || p.Token == "" {
+					continue
+				}
+				cfg.FederationPeers = append(cfg.FederationPeers, p)
+			}
+		}
 	}
 
 	cfg.LinearAPIKey = os.Getenv("LINEAR_API_KEY")

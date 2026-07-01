@@ -34,6 +34,17 @@ func (h *Handlers) HandleSendMessage(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(qErr), nil
 	}
 
+	// Federated DM: recipient addressed as "name@peerlabel" routes to a peer
+	// relay. Checked before local resolution so a peer address is never mistaken
+	// for a local agent. Direct DMs only (splitPeerAddr already excludes team:/
+	// conversation:/broadcast). No-op when federation is disabled or "to" has no
+	// "@peer" suffix.
+	if h.federation.Enabled() {
+		if name, peerLabel, ok := splitPeerAddr(to); ok {
+			return h.sendFederated(ctx, project, from, peerLabel, name, msgType, subject, content, priority, ttlSeconds, replyTo)
+		}
+	}
+
 	// Cross-project DM: delivered to a peer executive in a different project.
 	// MVP scope: direct messages only (no broadcast, no team, no conversation).
 	// Both sender and recipient must be registered with is_executive=true.

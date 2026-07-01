@@ -27,6 +27,10 @@ type Handlers struct {
 	connMu    sync.RWMutex
 	connector connector.TaskConnector
 
+	// federation forwards direct messages to/from trusted peer relays. Nil-safe:
+	// a disabled Federation (no peers) makes the send path behave as before.
+	federation *Federation
+
 	// budgetAlerted dedupes the per-agent budget-exceeded alert to once an hour
 	// (TSU-53 slice-C), so a runaway agent pings once, not every flush.
 	budgetMu      sync.Mutex
